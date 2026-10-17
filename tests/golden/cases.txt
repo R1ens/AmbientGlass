@@ -1,0 +1,32 @@
+# Golden cases: name | arguments for VlcAmbient.exe --render <in> <out> ...
+# Paths are relative to this folder; the output file is added by tools\golden.ps1.
+# Without --size the output is the picture plus 25% on every side; without --frame it is centred.
+
+# Layouts
+fullscreen_bars      | inputs/bars.png --size 640x180 --opaque
+fullscreen_radial    | inputs/radial.png --size 640x180 --opaque
+window_bars          | inputs/bars.png
+window_dark          | inputs/dark.png
+burned_in_bars       | inputs/letterbox.png --size 640x180 --frame 160,22,480,158 --pass 160,0,480,180 --crop 0,0.1222,1,0.8778 --opaque
+
+# Glow geometry
+spread_5             | inputs/bars.png --set spread=5
+spread_30            | inputs/bars.png --set spread=30
+spread_60            | inputs/bars.png --set spread=60
+edge_2               | inputs/radial.png --set edge=2
+edge_45              | inputs/radial.png --set edge=45
+blur_0               | inputs/bars.png --set blur=0
+blur_100             | inputs/bars.png --set blur=100
+edgeblend_0          | inputs/bars.png --size 640x180 --opaque --set edgeBlend=0
+edgeblend_100        | inputs/bars.png --size 640x180 --opaque --set edgeBlend=100
+fadestart_m50        | inputs/bars.png --set fadeStart=-50
+fadestart_100        | inputs/bars.png --set fadeStart=100
+fadecurve_1          | inputs/bars.png --set fadeCurve=1
+fadecurve_100        | inputs/bars.png --set fadeCurve=100
+directions_notop     | inputs/bars.png --set dirTop=0
+
+# Colour
+debanding_100        | inputs/dark.png --size 640x180 --opaque --set debanding=100
+bright_sat_150       | inputs/radial.png --set brightness=150 --set saturation=150
+vibrance_200         | inputs/radial.png --set vibrance=200
+hdr_white_2_5        | inputs/bars.png --size 640x180 --opaque --white 2.5 --hdr --set hdrSaturation=150
