@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "../../aimp/core/glass_window.h"
 #include "../../aimp/core/offscreen.h"
 #include "../test_framework.h"
 #include "demo_model.h"
@@ -132,6 +133,62 @@ int wmain(int argc, wchar_t** argv) {
     }
     UINT w = argc >= 4 ? (UINT)_wtoi(argv[2]) : 1600, h = argc >= 4 ? (UINT)_wtoi(argv[3]) : 1000;
     std::wprintf(L"%ls", off.Bench(demo::MakeModel(0), w, h, 1.f, 600).c_str());
+    // What copying the whole model costs with a large playlist (the window used to do it every frame).
+    glass::Model big = demo::MakeModel(0);
+    std::vector<glass::ListRow> rows;
+    for (int i = 0; i < 5000; i++) rows.push_back(big.rows[i % big.rows.size()]);
+    big.rows = rows;
+    glass::ApplyQuery(big);
+    LARGE_INTEGER f, t0, t1;
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&t0);
+    size_t sink = 0;
+    for (int i = 0; i < 200; i++) {
+      glass::Model copy = big;
+      sink += copy.rows.size();
+    }
+    QueryPerformanceCounter(&t1);
+    std::wprintf(L"  model copy, 5000 tracks     %7.3f ms (%zu)\n",
+                 (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / f.QuadPart / 200, sink / 200);
+    return 0;
+  }
+  if (argc >= 2 && std::wstring(argv[1]) == L"--pacing") {
+    // --pacing: opens the real window on the demo model for a few seconds and counts the frames it draws while
+    // playing, paused, and while the mouse moves over it.
+    struct NoCommands : glass::Commands {
+      void Command(const glass::Action&) override {}
+    } none;
+    glass::GlassWindow win;
+    std::wstring err;
+    glass::GlassSettings settings;
+    settings.windowW = 1100, settings.windowH = 700;
+    if (!win.Start(&none, settings, err)) {
+      std::wprintf(L"window failed: %ls\n", err.c_str());
+      return 2;
+    }
+    glass::Model demoModel = demo::MakeModel(0);
+    win.Post([demoModel](glass::Model& m) { m = demoModel; });
+    win.Show();
+    DEVMODEW dm{};
+    dm.dmSize = sizeof(dm);
+    EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dm);
+    std::wprintf(L"monitor: %lu Hz\n", dm.dmDisplayFrequency);
+    auto measure = [&](const wchar_t* what, bool moveMouse) {
+      Sleep(1500);  // settle
+      unsigned f0 = win.FramesDrawn();
+      DWORD t0 = GetTickCount();
+      while (GetTickCount() - t0 < 3000) {
+        if (moveMouse) PostMessageW(win.Hwnd(), WM_MOUSEMOVE, 0, MAKELPARAM(300 + (GetTickCount() / 20) % 50, 300));
+        Sleep(moveMouse ? 30 : 100);
+      }
+      std::wprintf(L"  %-28ls %5.0f fps\n", what, (win.FramesDrawn() - f0) / ((GetTickCount() - t0) / 1000.0));
+    };
+    measure(L"playing, no input", false);
+    measure(L"playing, mouse moving", true);
+    win.Post([](glass::Model& m) { m.state = glass::PlayState::Paused; });
+    measure(L"paused, no input", false);
+    measure(L"paused, mouse moving", true);
+    win.Stop();
     return 0;
   }
   if (argc >= 3 && std::wstring(argv[1]) == L"--golden")

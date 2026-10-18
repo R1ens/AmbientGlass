@@ -192,7 +192,6 @@ HitResult HitTest(const Layout& L, const Model& m, const UiState& s, float x, fl
   Rc vol = L.volume;
   vol.t -= 6, vol.b += 6;
   if (in(vol)) return {Hit::Volume};
-  if (in(L.btnSettings)) return {Hit::Settings};
   return {Hit::None};
 }
 

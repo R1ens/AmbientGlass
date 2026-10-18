@@ -16,7 +16,7 @@ enum class Hit {
   Nav0, Nav1, Nav2, Nav3, AddFolder, Scan, NavSettings,
   Cover, Shuffle, Prev, Play, Next, Repeat, Like, More, Wave,
   Search, Row, ListBackground, ListTitle,
-  BPrev, BPlay, BNext, Volume, Settings,
+  BPrev, BPlay, BNext, Volume,
   // Quick settings panel
   QuickPanel, QuickClose, QuickToggle, QuickSlider, QuickTheme, QuickAimpSettings, QuickClassic,
   // An open popup menu: an item, the menu's own background, anywhere else (closes it)

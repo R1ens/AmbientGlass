@@ -100,8 +100,8 @@ TEST(layout_list_has_room_for_rows) {
 TEST(layout_bottom_bar_items_in_order) {
   for (auto& s : kSizes) {
     Layout L = ComputeLayout(s[0], s[1]);
-    const Rc* order[] = {&L.miniCover, &L.miniText, &L.bPrev, &L.bPlay, &L.bNext, &L.bTime, &L.volume, &L.btnSettings};
-    for (int i = 0; i + 1 < 8; i++) CHECK(order[i]->r <= order[i + 1]->l);
+    const Rc* order[] = {&L.miniCover, &L.miniText, &L.bPrev, &L.bPlay, &L.bNext, &L.bTime, &L.volume};
+    for (int i = 0; i + 1 < 7; i++) CHECK(order[i]->r <= order[i + 1]->l);
     for (const Rc* r : order) CHECK(Inside(*r, L.bottom));
     CHECK(L.miniText.W() >= 120);
   }

@@ -66,6 +66,8 @@ class GlassWindow {
   void Show();   // shows and activates (restores when minimised)
   void Hide();
   HWND Hwnd() const { return m_hwnd; }
+  // Frames drawn so far (thread-safe): for checking the frame pacing.
+  unsigned FramesDrawn() const { return m_framesDrawn.load(); }
 
  private:
   struct Gpu;
@@ -73,6 +75,8 @@ class GlassWindow {
   static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp);
   LRESULT Handle(UINT msg, WPARAM wp, LPARAM lp);
   void Frame();
+  double Now() const;  // seconds, from the performance counter
+  void Pump();         // handles every waiting message
   void Resize();
   void UpdateHover(float x, float y);
   void Click(const HitResult& h, float x, float y);
@@ -110,8 +114,10 @@ class GlassWindow {
   float m_palT = 1;
   double m_posBase = 0, m_posAt = 0;  // last reported position and when it came (seconds of m_clock)
   double m_clock = 0;
+  double m_lastInput = -1e9;  // Now() of the last mouse or keyboard input: frames run at the full rate after it
   double m_animClock = 0;  // the background's clock, faster for faster music
   bool m_inFrame = false;
+  std::atomic<unsigned> m_framesDrawn{0};
   int m_modal = 0;  // nested modal loops (sizing, the system menu, the folder dialog) that render on a timer
   float m_rate = 1;
   LARGE_INTEGER m_qpcFreq{}, m_qpcLast{};

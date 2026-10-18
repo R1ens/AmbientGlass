@@ -42,7 +42,7 @@ struct Layout {
   float colNum = 28, colAlbum = 120, colDur = 48, colGap = 8;
 
   Rc bottom;  // bottom bar glass panel
-  Rc miniCover, miniText, bPrev, bPlay, bNext, bTime, volume, btnSettings;
+  Rc miniCover, miniText, bPrev, bPlay, bNext, bTime, volume;  // quick settings open from the sidebar
 
   Rc quick;  // quick settings panel (when open)
 };

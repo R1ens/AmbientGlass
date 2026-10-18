@@ -727,11 +727,6 @@ void UiPainter::Bottom(const Model& m, const Layout& L, const UiState& s) {
   RoundFill(fill, 2, g.Get());
   if (hov(Hit::Volume) || s.draggingVolume)
     m_dc->FillEllipse(D2D1::Ellipse(D2D1::Point2F(fill.r, track.Cy()), 6, 6), Solid(C(1, 1, 1)));
-
-  const Rc& st = L.btnSettings;
-  RoundFill(st, 11, Solid(C(1, 1, 1, hov(Hit::Settings) || m.quickSettingsOpen ? 0.12f : 0.04f)));
-  RoundStroke(st, 11, m_light ? C(0, 0, 0, 0.12f) : C(1, 1, 1, 0.14f));
-  Icon(kIcSettings, st, 15, m_dim);
 }
 
 void UiPainter::Menu(const Layout& L, const UiState& s) {

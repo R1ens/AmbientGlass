@@ -211,9 +211,17 @@ void GlassWindow::ThreadMain(GlassSettings settings, std::wstring* error, HANDLE
   if (settings.maximized) m_ui.maximized = true;
   SetEvent(ready);
 
-  // Loop: render while visible (every refresh while playing, 30 fps otherwise), sleep while hidden.
+  // Loop: sleep while hidden; while visible, draw at a rate that fits what is going on. The mouse or keyboard
+  // in use: every refresh, so the interface follows the hand. Music playing: at most 120 fps, the background
+  // moves slowly and more frames only cost power on fast monitors. Paused: 30 fps for the slow breathing.
+  // The frame-latency waitable is waited on only right before a frame is drawn: taking its signal and then
+  // skipping the frame would leave it unsignalled until a timeout.
+  // Plain wait timeouts round up to the system tick (~15 ms) and would miss refreshes; a high-resolution
+  // waitable timer wakes the loop within a fraction of a millisecond.
+  HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+  if (!timer) timer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
   MSG msg;
-  double lastFrame = 0;
+  double lastFrame = 0;  // when the previous frame started
   while (m_running) {
     const bool visible = IsWindowVisible(m_hwnd) && !IsIconic(m_hwnd);
     if (!visible) {
@@ -222,36 +230,48 @@ void GlassWindow::ThreadMain(GlassSettings settings, std::wstring* error, HANDLE
       DispatchMessageW(&msg);
       continue;
     }
-    const bool playing = m_model.state == PlayState::Playing;
-    LARGE_INTEGER now;
-    QueryPerformanceCounter(&now);
-    double t = (double)(now.QuadPart) / m_qpcFreq.QuadPart;
-    double wait = playing ? 0 : std::max(0.0, 1.0 / 30 - (t - lastFrame));
-    DWORD r2 = MsgWaitForMultipleObjectsEx(1, &m_gpu->waitable, (DWORD)(wait * 1000), QS_ALLINPUT,
-                                           MWMO_INPUTAVAILABLE);
-    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-      if (msg.message == WM_QUIT) m_running = false;
-      TranslateMessage(&msg);
-      DispatchMessageW(&msg);
+    const double now = Now();
+    const bool active = now - m_lastInput < 1.0 || m_ui.draggingWave || m_ui.draggingVolume || m_ui.draggingSlider;
+    const double interval = active ? 0 : m_model.state == PlayState::Playing ? 1.0 / 120 : 1.0 / 30;
+    const double due = lastFrame + interval - 0.0015;  // a little early: the waitable then lands it on a refresh
+    if (now < due) {
+      LARGE_INTEGER rel;
+      rel.QuadPart = -(LONGLONG)((due - now) * 1e7);  // relative, in 100 ns
+      if (timer && SetWaitableTimer(timer, &rel, 0, nullptr, nullptr, FALSE))
+        MsgWaitForMultipleObjectsEx(1, &timer, (DWORD)std::ceil((due - now) * 1000) + 20, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+      else
+        MsgWaitForMultipleObjectsEx(0, nullptr, (DWORD)std::ceil((due - now) * 1000), QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+      Pump();
+      continue;
     }
-    if (!m_running || !IsWindowVisible(m_hwnd) || IsIconic(m_hwnd)) continue;
-    QueryPerformanceCounter(&now);
-    t = (double)(now.QuadPart) / m_qpcFreq.QuadPart;
-    if (r2 == WAIT_OBJECT_0 && (playing || t - lastFrame >= 1.0 / 30 - 0.002)) {
+    DWORD slot = MsgWaitForMultipleObjectsEx(1, &m_gpu->waitable, 100, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+    if (slot == WAIT_OBJECT_0 && m_running) {
+      lastFrame = Now();
       Frame();
-      lastFrame = t;
-    } else if (!playing && t - lastFrame >= 1.0 / 30) {
-      // The waitable was consumed by an earlier frame: wait for it once more before the next one.
-      WaitForSingleObject(m_gpu->waitable, 50);
-      Frame();
-      lastFrame = t;
     }
+    Pump();
   }
+  if (timer) CloseHandle(timer);
   if (m_hwnd) DestroyWindow(m_hwnd);
   m_hwnd = nullptr;
   m_gpu.reset();
   UnregisterClassW(kClass, GetModuleHandleW(nullptr));
   CoUninitialize();
+}
+
+double GlassWindow::Now() const {
+  LARGE_INTEGER t;
+  QueryPerformanceCounter(&t);
+  return (double)t.QuadPart / (double)m_qpcFreq.QuadPart;
+}
+
+void GlassWindow::Pump() {
+  MSG msg;
+  while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+    if (msg.message == WM_QUIT) m_running = false;
+    TranslateMessage(&msg);
+    DispatchMessageW(&msg);
+  }
 }
 
 void GlassWindow::Resize() {
@@ -305,8 +325,11 @@ void GlassWindow::Frame() {
   if (!posted.empty()) {
     double pos = m_model.position;
     Palette pal = m_model.palette;
+    const ListRow* rows = m_model.rows.data();
+    const size_t rowCount = m_model.rows.size();
     for (auto& f : posted) f(m_model);
-    ApplyQuery(m_model);
+    // Most posts are position ticks (10 a second): filter the list again only when it was replaced.
+    if (m_model.rows.data() != rows || m_model.rows.size() != rowCount) ApplyQuery(m_model);
     if (m_model.position != pos) m_posBase = m_model.position, m_posAt = m_clock;
     if (!SamePalette(pal, m_model.palette)) {
       m_palFrom = MixPalettes(m_palFrom, m_palTo, m_palT);
@@ -315,8 +338,29 @@ void GlassWindow::Frame() {
     }
   }
 
-  // Animated values for this frame.
-  Model m = m_model;
+  // With AIMPGLASS_FPS_LOG=1 the log gets the frame rate every 5 s: to check the pacing on a real monitor.
+  {
+    static const bool fpsLog = [] {
+      wchar_t v[8] = {};
+      return GetEnvironmentVariableW(L"AIMPGLASS_FPS_LOG", v, 8) > 0 && v[0] == L'1';
+    }();
+    static double since = 0;
+    static int frames = 0;
+    if (fpsLog) {
+      frames++, since += dt;
+      if (since >= 5) {
+        Log::Info("glass: %.0f fps (%s, %s)", frames / since,
+                  m_model.state == PlayState::Playing ? "playing" : "paused",
+                  Now() - m_lastInput < 1.0 ? "input" : "no input");
+        frames = 0, since = 0;
+      }
+    }
+  }
+
+  // Animated values for this frame, written into the model itself: copying it (the whole playlist with it) every
+  // frame cost more than drawing. The posted values they replace are kept apart: the position as m_posBase,
+  // the palette as m_palTo; the checks above compare against whatever was shown.
+  Model& m = m_model;
   AudioFrame a = m_audio.Snapshot();
   // The background's own clock runs faster for faster music (smoothly, so a tempo change never jolts it).
   const float target = a.bpm > 0 ? std::clamp(a.bpm / 120.f, 0.65f, 1.5f) : 1.f;
@@ -363,6 +407,7 @@ void GlassWindow::Frame() {
     m_gpu->painter.PaintMenu(m_gpu->back.Get(), s, m, m_layout, m_ui);
   }
   HRESULT hr = m_gpu->swap->Present(1, 0);
+  m_framesDrawn++;
   if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
     Log::Error("glass: device lost: %s", Log::HrText(hr).c_str());
 }
@@ -482,6 +527,7 @@ LRESULT GlassWindow::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       ShowWindow(m_hwnd, SW_HIDE);
       return 0;
     case WM_MOUSEMOVE:
+      m_lastInput = Now();
       UpdateHover(GET_X_LPARAM(lp) / s, GET_Y_LPARAM(lp) / s);
       return 0;
     case WM_MOUSELEAVE:
@@ -490,6 +536,7 @@ LRESULT GlassWindow::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     case WM_LBUTTONDOWN:
     case WM_LBUTTONDBLCLK: {
+      m_lastInput = Now();
       SetCapture(m_hwnd);
       float x = GET_X_LPARAM(lp) / s, y = GET_Y_LPARAM(lp) / s;
       m_ui.pressed = HitTest(m_layout, m_model, m_ui, x, y);
@@ -538,6 +585,7 @@ LRESULT GlassWindow::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       }
       return 0;
     case WM_MOUSEWHEEL: {
+      m_lastInput = Now();
       POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
       ScreenToClient(m_hwnd, &pt);
       float x = pt.x / s, y = pt.y / s, steps = GET_WHEEL_DELTA_WPARAM(wp) / (float)WHEEL_DELTA;
@@ -553,6 +601,7 @@ LRESULT GlassWindow::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     }
     case WM_KEYDOWN:
+      m_lastInput = Now();
       Key((UINT)wp);
       return 0;
     case WM_CHAR:
@@ -624,7 +673,7 @@ void GlassWindow::Click(const HitResult& h, float x, float) {
       m_ui.menu = std::move(menu);
       break;
     }
-    case Hit::NavSettings: case Hit::Settings: m.quickSettingsOpen = !m.quickSettingsOpen; break;
+    case Hit::NavSettings: m.quickSettingsOpen = !m.quickSettingsOpen; break;
     case Hit::Shuffle: m.shuffle = !m.shuffle; Send(Action{Act::Shuffle, m.shuffle ? 1.0 : 0.0}); break;
     case Hit::Repeat: {
       m.repeat = m.repeat == Repeat::Off ? Repeat::All : Repeat::Off;

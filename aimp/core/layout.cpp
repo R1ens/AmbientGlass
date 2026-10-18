@@ -144,8 +144,7 @@ Layout ComputeLayout(float width, float height) {
     const Rc& b = L.bottom;
     const float cy = b.Cy();
     L.miniCover = Box(b.l + 14, cy - 24, 48, 48);
-    L.btnSettings = Box(b.r - 14 - 38, cy - 19, 38, 38);
-    L.volume = Box(L.btnSettings.l - 14 - 120, cy - 10, 120, 20);
+    L.volume = Box(b.r - 18 - 120, cy - 10, 120, 20);
     L.bTime = Box(L.volume.l - 14 - 96, cy - 10, 96, 20);
     L.bNext = Box(L.bTime.l - 8 - 36, cy - 18, 36, 36);
     L.bPlay = Box(L.bNext.l - 8 - 44, cy - 22, 44, 44);
