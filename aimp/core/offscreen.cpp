@@ -29,7 +29,7 @@ bool Offscreen::Init(bool warp, std::wstring& error) {
 }
 
 bool Offscreen::Render(const Model& m, UINT w, UINT h, float scale, const SceneOptions& o, bool ui,
-                       std::vector<uint8_t>& bgra) {
+                       std::vector<uint8_t>& bgra, const UiState* state) {
   D3D11_TEXTURE2D_DESC d{};
   d.Width = w;
   d.Height = h;
@@ -51,11 +51,15 @@ bool Offscreen::Render(const Model& m, UINT w, UINT h, float scale, const SceneO
   so.mono = m.settings.mono / 100.f;
   m_scene.Render(rtv.Get(), w, h, scale, m, L, so);
   if (ui) {
-    UiState s;
+    UiState s = state ? *state : UiState{};
     m_painter->Paint(tex.Get(), scale, m, L, s);
     if (m.quickSettingsOpen) {
-      m_scene.RenderOverlay(rtv.Get(), w, h, scale, m, L, so);
+      m_scene.RenderOverlay(rtv.Get(), w, h, scale, m, L, so, L.quick, 0.40f, kPanelRadius);
       m_painter->PaintQuick(tex.Get(), scale, m, L, s);
+    }
+    if (s.menu.kind != MenuKind::None) {
+      m_scene.RenderOverlay(rtv.Get(), w, h, scale, m, L, so, MenuRect(L, s.menu), 0.f, 14.f);
+      m_painter->PaintMenu(tex.Get(), scale, m, L, s);
     }
     m_painter->ReleaseTarget();
   }

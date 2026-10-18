@@ -24,6 +24,8 @@ class UiPainter {
   void Paint(ID3D11Texture2D* target, float scale, const Model& m, const Layout& L, const UiState& s);
   // The quick settings panel's contents, after GpuScene::RenderOverlay drew its glass.
   void PaintQuick(ID3D11Texture2D* target, float scale, const Model& m, const Layout& L, const UiState& s);
+  // The open menu's items, after GpuScene::RenderOverlay drew its glass at MenuRect.
+  void PaintMenu(ID3D11Texture2D* target, float scale, const Model& m, const Layout& L, const UiState& s);
   // Drop the cached target bitmap (call before resizing the swap chain).
   void ReleaseTarget();
   // Right edge of the playlist chooser button in the last Paint (layout units), 0 when there is none.
@@ -58,6 +60,7 @@ class UiPainter {
   void Card(const Model& m, const Layout& L, const UiState& s);
   void WaveBar(const Model& m, const Layout& L, const UiState& s);
   void Spectrum(const Model& m, const Rc& sp);
+  void Menu(const Layout& L, const UiState& s);
   void List(const Model& m, const Layout& L, const UiState& s);
   void Bottom(const Model& m, const Layout& L, const UiState& s);
   void Quick(const Model& m, const Layout& L, const UiState& s);

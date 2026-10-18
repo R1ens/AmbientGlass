@@ -149,10 +149,57 @@ TEST(layout_list_title_is_left_of_search_and_clickable_with_a_choice) {
   CHECK(HitTest(L, m, st, L.listTitle.l + 70, y).hit != Hit::ListTitle);
 }
 
-TEST(menu_text_shows_ampersands_and_tabs_as_is) {
-  CHECK(MenuText(L"Rock & Roll") == L"Rock && Roll");
-  CHECK(MenuText(L"a\tb") == L"a b");
-  CHECK(MenuText(L"") == L"");
+namespace {
+PopupMenu MoreMenu(const Layout& L) {
+  PopupMenu m;
+  m.kind = MenuKind::More;
+  m.anchor = L.btnMore;
+  m.alignRight = true;
+  for (int i = 0; i < 4; i++) {
+    PopupItem it;
+    it.text = L"item", it.id = i, it.separator = i == 2, it.enabled = i != 0;
+    m.items.push_back(it);
+  }
+  return m;
+}
+}  // namespace
+
+TEST(menu_opens_under_its_button_inside_the_window) {
+  for (auto& sz : kSizes) {
+    Layout L = ComputeLayout(sz[0], sz[1]);
+    PopupMenu menu = MoreMenu(L);
+    Rc r = MenuRect(L, menu);
+    CHECK(Inside(r, Rc{0, 0, L.w, L.h}));
+    CHECK_NEAR(r.r, L.btnMore.r, 0.01);  // right-aligned to the button
+    CHECK(r.t >= L.btnMore.b || r.b <= L.btnMore.t);
+    for (int i = 0; i + 1 < (int)menu.items.size(); i++) CHECK(MenuItemRect(L, menu, i).b <= MenuItemRect(L, menu, i + 1).t);
+    CHECK(MenuItemRect(L, menu, 3).b <= r.b);
+  }
+}
+
+TEST(menu_takes_clicks_while_open) {
+  Layout L = ComputeLayout(1280, 800);
+  Model m;
+  UiState s;
+  s.menu = MoreMenu(L);
+  Rc i1 = MenuItemRect(L, s.menu, 1), i0 = MenuItemRect(L, s.menu, 0), sep = MenuItemRect(L, s.menu, 2);
+  CHECK(HitTest(L, m, s, i1.Cx(), i1.Cy()).hit == Hit::MenuItem);
+  CHECK_EQ(HitTest(L, m, s, i1.Cx(), i1.Cy()).index, 1);
+  CHECK(HitTest(L, m, s, i0.Cx(), i0.Cy()).hit == Hit::MenuPanel);   // disabled
+  CHECK(HitTest(L, m, s, sep.Cx(), sep.Cy()).hit == Hit::MenuPanel);  // separator
+  CHECK(HitTest(L, m, s, L.btnPlay.Cx(), L.btnPlay.Cy()).hit == Hit::MenuClose);
+  CHECK(HitTest(L, m, s, L.btnClose.Cx(), L.btnClose.Cy()).hit == Hit::MenuClose);
+}
+
+TEST(menu_keyboard_skips_separators_and_disabled_items) {
+  Layout L = ComputeLayout(1280, 800);
+  PopupMenu menu = MoreMenu(L);  // 0 disabled, 1 ok, 2 separator, 3 ok
+  CHECK_EQ(MenuStep(menu, -1, 1), 1);
+  CHECK_EQ(MenuStep(menu, 1, 1), 3);
+  CHECK_EQ(MenuStep(menu, 3, 1), 1);  // wraps
+  CHECK_EQ(MenuStep(menu, -1, -1), 3);
+  PopupMenu none;
+  CHECK_EQ(MenuStep(none, -1, 1), -1);
 }
 
 TEST(light_look_gives_way_to_black_and_silver) {

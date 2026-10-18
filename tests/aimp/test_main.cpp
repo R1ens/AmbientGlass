@@ -28,6 +28,7 @@ int RenderDemo(const std::wstring& dir, bool warp) {
     UINT w, h;
     float scale;
     bool ui;
+    bool menu = false;
   } shots[] = {
       {L"playing", 0, 1600, 1000, 1.f, true},   {L"background_only", 0, 1600, 1000, 1.f, false},
       {L"long_title", 1, 1280, 800, 1.f, true}, {L"liked", 2, 1440, 900, 1.f, true},
@@ -35,14 +36,15 @@ int RenderDemo(const std::wstring& dir, bool warp) {
       {L"light", 5, 1600, 1000, 1.f, true},     {L"light_background", 5, 1600, 1000, 1.f, false},     {L"min_size", 0, 880, 600, 1.f, true},
       {L"hidpi_150", 0, 2400, 1500, 1.5f, true},
       {L"clear_glass", 7, 1600, 1000, 1.f, true}, {L"mono", 8, 1600, 1000, 1.f, true},
-      {L"mono_clear", 9, 1600, 1000, 1.f, true},
+      {L"mono_clear", 9, 1600, 1000, 1.f, true}, {L"menu", 0, 1600, 1000, 1.f, true, true},
   };
   CreateDirectoryW(dir.c_str(), nullptr);
   for (const Shot& s : shots) {
     glass::Model m = demo::MakeModel(s.variant);
     glass::SceneOptions o;
     std::vector<uint8_t> px;
-    if (!off.Render(m, s.w, s.h, s.scale, o, s.ui, px)) {
+    glass::UiState st = s.menu ? demo::MoreMenuOpen(s.w, s.h, s.scale) : glass::UiState{};
+    if (!off.Render(m, s.w, s.h, s.scale, o, s.ui, px, &st)) {
       std::wprintf(L"%ls: render failed\n", s.name);
       return 3;
     }
@@ -71,9 +73,10 @@ int Golden(const std::wstring& dir, bool update) {
     const wchar_t* name;
     int variant;
     UINT w, h;
+    bool menu = false;
   } shots[] = {{L"playing", 0, 1100, 700}, {L"quick_settings", 4, 1100, 700}, {L"light", 5, 1100, 700},
                {L"min_size", 0, 880, 600}, {L"long_title", 1, 1100, 700}, {L"mono_cover", 6, 1100, 700},
-               {L"clear_mono", 9, 1100, 700}};
+               {L"clear_mono", 9, 1100, 700}, {L"menu", 0, 1100, 700, true}};
   constexpr double kMinPsnr = 40;
   int failed = 0;
   for (const Shot& s : shots) {
@@ -81,7 +84,8 @@ int Golden(const std::wstring& dir, bool update) {
     glass::SceneOptions o;
     rt::Image got;
     got.w = s.w, got.h = s.h;
-    if (!off->Render(m, s.w, s.h, 1.f, o, true, got.bgra)) {
+    glass::UiState st = s.menu ? demo::MoreMenuOpen(s.w, s.h, 1.f) : glass::UiState{};
+    if (!off->Render(m, s.w, s.h, 1.f, o, true, got.bgra, &st)) {
       std::wprintf(L"FAIL %ls: render\n", s.name);
       failed++;
       continue;

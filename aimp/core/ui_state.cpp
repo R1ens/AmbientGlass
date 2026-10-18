@@ -6,6 +6,10 @@
 namespace glass {
 namespace {
 
+constexpr float kMenuW = 264, kMenuItemH = 34, kMenuSepH = 9, kMenuPad = 6;
+float MenuItemH(const PopupItem& it) { return it.separator ? kMenuSepH : kMenuItemH; }
+bool Selectable(const PopupItem& it) { return !it.separator && it.enabled; }
+
 // A low quick settings panel puts its two buttons side by side to leave the rows more room.
 bool QuickLow(const Layout& L) { return L.quick.H() < 640; }
 
@@ -85,15 +89,32 @@ int RowAt(const Layout& L, const UiState& s, int rowCount, float y) {
 
 float Fraction(const Rc& r, float x) { return r.W() > 0 ? std::clamp((x - r.l) / r.W(), 0.f, 1.f) : 0.f; }
 
-std::wstring MenuText(const std::wstring& s) {
-  std::wstring out;
-  out.reserve(s.size());
-  for (wchar_t c : s) {
-    if (c == L'\t') c = L' ';  // a tab would start the right-aligned column
-    out += c;
-    if (c == L'&') out += L'&';
+Rc MenuRect(const Layout& L, const PopupMenu& m) {
+  float h = 2 * kMenuPad;
+  for (const PopupItem& it : m.items) h += MenuItemH(it);
+  float x = m.alignRight ? m.anchor.r - kMenuW : m.anchor.l;
+  float y = m.anchor.b + 6;
+  if (y + h > L.h - 8 && m.anchor.t - 6 - h >= 8) y = m.anchor.t - 6 - h;  // no room below: open upwards
+  x = std::clamp(x, 8.f, std::max(8.f, L.w - 8 - kMenuW));
+  y = std::clamp(y, 8.f, std::max(8.f, L.h - 8 - h));
+  return Rc{x, y, x + kMenuW, y + h};
+}
+
+Rc MenuItemRect(const Layout& L, const PopupMenu& m, int i) {
+  const Rc r = MenuRect(L, m);
+  float y = r.t + kMenuPad;
+  for (int k = 0; k < i; k++) y += MenuItemH(m.items[k]);
+  return Rc{r.l + kMenuPad, y, r.r - kMenuPad, y + MenuItemH(m.items[i])};
+}
+
+int MenuStep(const PopupMenu& m, int i, int dir) {
+  const int n = (int)m.items.size();
+  const int start = i >= 0 && i < n ? i : (dir > 0 ? -1 : n);
+  for (int k = 1; k <= n; k++) {
+    int j = ((start + dir * k) % n + n) % n;
+    if (Selectable(m.items[j])) return j;
   }
-  return out;
+  return -1;
 }
 
 HitResult HitTest(const Layout& L, const Model& m, const UiState& s, float x, float y) {
@@ -102,6 +123,15 @@ HitResult HitTest(const Layout& L, const Model& m, const UiState& s, float x, fl
     float dx = x - r.Cx(), dy = y - r.Cy(), rad = r.W() / 2;
     return r.Valid() && dx * dx + dy * dy <= rad * rad;
   };
+
+  // An open menu takes every click: its items, or anywhere else to close it.
+  if (s.menu.kind != MenuKind::None) {
+    if (!in(MenuRect(L, s.menu))) return {Hit::MenuClose};
+    for (int i = 0; i < (int)s.menu.items.size(); i++)
+      if (!s.menu.items[i].separator && in(MenuItemRect(L, s.menu, i)))
+        return Selectable(s.menu.items[i]) ? HitResult{Hit::MenuItem, i} : HitResult{Hit::MenuPanel};
+    return {Hit::MenuPanel};
+  }
 
   if (in(L.btnClose)) return {Hit::Close};
   if (in(L.btnMax)) return {Hit::Max};

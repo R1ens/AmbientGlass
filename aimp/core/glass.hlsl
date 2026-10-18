@@ -55,6 +55,15 @@ float Fbm(float2 p) {
 // 1 on the middle value of the noise, falling to 0 at its extremes: thin bright lines where noise crosses 0.5.
 float Ridge(float v) { return saturate(1 - abs(2 * v - 1)); }
 
+// A thin line pow(Ridge(v), sharp), never narrower than about 1.5 px on screen: a thinner line would only break
+// up into flickering grain. A line widened that way gets dimmer by as much, so it keeps its brightness overall,
+// like a real line covering part of a pixel.
+float Line(float v, float sharp) {
+  float fw = max(fwidth(v), 1e-5);
+  float s = min(sharp, 0.45 / fw);
+  return pow(Ridge(v), s) * (s / sharp);
+}
+
 float3 SrgbToLin(float3 c) { return c <= 0.04045 ? c / 12.92 : pow(max((c + 0.055) / 1.055, 0), 2.4); }
 float3 LinToSrgb(float3 c) {
   c = saturate(c);
@@ -113,7 +122,7 @@ float4 PSRibbons(VSOut i) : SV_Target {
   float sharp = lerp(14.0, 7.0, high);
   float ripple = 1 + 0.35 * high * sin(rn * 16 - t * 3.2);
   float filReach = 1.9 + 0.5 * bass + 0.8 * pulse;  // in cover half-sides
-  float fil = pow(Ridge(fv), sharp) * exp(-pow(max(rn - 0.6, 0) / filReach, 2) * 2.5) * ripple;
+  float fil = Line(fv, sharp) * exp(-pow(max(rn - 0.6, 0) / filReach, 2) * 2.5) * ripple;
 
   // Rays: thin angular threads leaving the mass, slightly curled, each with its own length; they taper and
   // fade along their length but the longest reach the far edges of the window, further on a beat.
@@ -124,7 +133,7 @@ float4 PSRibbons(VSOut i) : SV_Target {
   float rayLen = lerp(0.35, 1.05, lenNoise) * reach * (0.85 + 0.35 * pulse + 0.15 * bass);
   float along = saturate(rn / max(rayLen, 1e-3));
   float width = lerp(22.0, 80.0, saturate(rn / reach));          // thinner further out
-  float ray = pow(Ridge(rv), width);
+  float ray = Line(rv, width);
   ray *= smoothstep(0.75, 1.35, rn) * (1 - smoothstep(0.45, 1.0, along)) * pow(1 - along, 1.5);
 
   // A single accent colour; the waves of density are variations of its hue and saturation.
@@ -142,8 +151,13 @@ float4 PSRibbons(VSOut i) : SV_Target {
   return float4(o, 1);
 }
 
-// A downsample of the ribbons for the glass: a box over a few mips, the blur pass smooths it further.
-float4 PSDown(VSOut i) : SV_Target { return t0.SampleLevel(sLin, i.uv, 1.5); }
+// A downsample of the ribbons for the glass (an eighth of the window): a box over a few mips, half a step short
+// of the target size; the blur pass smooths it further.
+float4 PSDown(VSOut i) : SV_Target {
+  float rw, rh;
+  t0.GetDimensions(rw, rh);
+  return t0.SampleLevel(sLin, i.uv, max(log2(rw / max(target.x / 8, 1)) - 0.5, 0));
+}
 
 // ---------------------------------------------------------------------------------------------------------
 // Composite: background, glass panels, cover glow, veil, dither. t0 = ribbons, t1 = blurred ribbons (glass),
@@ -186,7 +200,7 @@ float3 Lit(float3 rib, float v) {
 }
 
 float3 Background(float2 uv, float2 p) {
-  float3 rib = t0.SampleLevel(sLin, uv, 0.7).rgb;
+  float3 rib = t0.SampleLevel(sLin, uv, 0).rgb;
   // Darker towards the bottom and the corners, like light falling off in a room.
   float v = 1 - 0.55 * smoothstep(0.35, 1.0, uv.y) - 0.25 * smoothstep(0.55, 1.1, length(uv - 0.5) * 1.4);
   return Lit(rib, v);

@@ -3,6 +3,7 @@
 // control is at a point. Pure, so tests can click through the layout.
 
 #include <string>
+#include <vector>
 
 #include "layout.h"
 #include "model.h"
@@ -18,6 +19,8 @@ enum class Hit {
   BPrev, BPlay, BNext, Volume, Settings,
   // Quick settings panel
   QuickPanel, QuickClose, QuickToggle, QuickSlider, QuickTheme, QuickAimpSettings, QuickClassic,
+  // An open popup menu: an item, the menu's own background, anywhere else (closes it)
+  MenuItem, MenuPanel, MenuClose,
 };
 
 struct HitResult {
@@ -52,6 +55,29 @@ Rc QuickCloseRect(const Layout& L);
 Rc QuickAimpSettingsRect(const Layout& L);
 Rc QuickClassicRect(const Layout& L);
 
+// A small menu drawn inside the window (the "⋯" button, the playlist chooser). No modal loop, so the window
+// keeps animating while it is open, and it is glass like the rest of the window.
+struct PopupItem {
+  std::wstring text;
+  std::wstring hint;  // right-aligned, dimmer ("играет")
+  std::wstring key;   // what the item refers to (a playlist id)
+  int id = 0;
+  bool checked = false, enabled = true, separator = false;
+};
+enum class MenuKind { None, More, Playlists };
+struct PopupMenu {
+  MenuKind kind = MenuKind::None;
+  std::vector<PopupItem> items;
+  Rc anchor;                // the control it opened from
+  bool alignRight = false;  // its right edge under the anchor's right edge
+  int hot = -1;             // the keyboard's item
+};
+// The menu under its anchor (above it when there is no room below), inside the window.
+Rc MenuRect(const Layout& L, const PopupMenu& m);
+Rc MenuItemRect(const Layout& L, const PopupMenu& m, int i);
+// The next selectable item after i in direction dir (+1 / -1), wrapping around; -1 when there is none.
+int MenuStep(const PopupMenu& m, int i, int dir);
+
 struct UiState {
   HitResult hover, pressed;
   float listScroll = 0;      // px scrolled in the list, layout units
@@ -62,6 +88,7 @@ struct UiState {
   bool draggingWave = false, draggingVolume = false, draggingSlider = false;
   float dragValue = 0;       // 0..1 while dragging the wave or volume
   float listTitleR = 0;      // right edge of the drawn playlist chooser button; 0 = all of L.listTitle
+  PopupMenu menu;            // kind None while closed
 };
 
 HitResult HitTest(const Layout& L, const Model& m, const UiState& s, float x, float y);
@@ -74,7 +101,5 @@ float MaxScroll(const Layout& L, int rowCount);
 // Position along a horizontal control, 0..1.
 float Fraction(const Rc& r, float x);
 
-// Text for a Win32 menu item shown as is: "&" would otherwise underline the next letter.
-std::wstring MenuText(const std::wstring& s);
 
 }  // namespace glass

@@ -77,6 +77,11 @@ class GlassWindow {
   void UpdateHover(float x, float y);
   void Click(const HitResult& h, float x, float y);
   void DragSlider(float x);
+  void RunMenu(const PopupMenu& menu, int item);
+  // Windows runs its own message loop while the window is sized or moved, a system menu or a dialog is open:
+  // a timer keeps frames coming meanwhile.
+  void EnterModal();
+  void LeaveModal();
   void Key(UINT vk);
   void Char(wchar_t c);
   void Send(Action a);
@@ -106,6 +111,8 @@ class GlassWindow {
   double m_posBase = 0, m_posAt = 0;  // last reported position and when it came (seconds of m_clock)
   double m_clock = 0;
   double m_animClock = 0;  // the background's clock, faster for faster music
+  bool m_inFrame = false;
+  int m_modal = 0;  // nested modal loops (sizing, the system menu, the folder dialog) that render on a timer
   float m_rate = 1;
   LARGE_INTEGER m_qpcFreq{}, m_qpcLast{};
   bool m_tracking = false;

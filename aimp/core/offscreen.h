@@ -13,15 +13,17 @@
 namespace glass {
 
 class UiPainter;
+struct UiState;
 
 class Offscreen {
  public:
   Offscreen();
   ~Offscreen();
   bool Init(bool warp, std::wstring& error);
-  // One frame of `m` at w x h px (scale px per layout unit); BGRA8 rows of w * 4 bytes.
+  // One frame of `m` at w x h px (scale px per layout unit); BGRA8 rows of w * 4 bytes. `state` (hover, an open
+  // menu...) defaults to a window nobody touches.
   bool Render(const Model& m, UINT w, UINT h, float scale, const SceneOptions& o, bool ui,
-              std::vector<uint8_t>& bgra);
+              std::vector<uint8_t>& bgra, const UiState* state = nullptr);
   bool SavePng(const std::wstring& path, UINT w, UINT h, const std::vector<uint8_t>& bgra, std::string& err);
 
  private:

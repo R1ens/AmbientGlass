@@ -30,10 +30,11 @@ class GpuScene {
   // Draws into `rtv` (an 8-bit BGRA or RGBA target of w x h px); `scale` = px per layout unit (DPI / 96).
   void Render(ID3D11RenderTargetView* rtv, UINT w, UINT h, float scale, const Model& m, const Layout& L,
               const SceneOptions& o);
-  // The quick settings layer, blended over the finished main frame (after its text): a veil over the window and
-  // the glass of the settings panel. Uses the background Render() made for this frame.
+  // A layer above the finished main frame (after its text): the quick settings panel or a menu. `veil` darkens
+  // the window around it (0 = only a soft shadow), `radius` rounds its corners; the glass is always frosted so
+  // its text reads. Uses the background Render() made for this frame.
   void RenderOverlay(ID3D11RenderTargetView* rtv, UINT w, UINT h, float scale, const Model& m, const Layout& L,
-                     const SceneOptions& o);
+                     const SceneOptions& o, const Rc& panel, float veil, float radius);
 
  private:
   bool Ensure(UINT w, UINT h);

@@ -24,6 +24,8 @@ constexpr UINT WM_GLASS_POSTED = WM_APP + 1;
 constexpr UINT WM_GLASS_SHOW = WM_APP + 2;
 constexpr UINT WM_GLASS_HIDE = WM_APP + 3;
 constexpr float kResizeBorder = 6;
+enum { kMenuShowFile = 1, kMenuAimpSettings, kMenuClassic };
+constexpr UINT_PTR kModalTimer = 1;
 
 std::wstring PickFolder(HWND owner) {
   ComPtr<IFileOpenDialog> dlg;
@@ -191,6 +193,7 @@ void GlassWindow::ThreadMain(GlassSettings settings, std::wstring* error, HANDLE
   sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
   sd.BufferCount = 2;
   sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+  sd.Scaling = DXGI_SCALING_NONE;  // while sizing, never stretch an old frame to the new size
   sd.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
   ComPtr<IDXGISwapChain1> sc1;
   hr = factory->CreateSwapChainForHwnd(m_gpu->device.Get(), m_hwnd, &sd, nullptr, nullptr, &sc1);
@@ -271,7 +274,21 @@ void GlassWindow::Resize() {
   m_gpu->w = w, m_gpu->h = h;
 }
 
+void GlassWindow::EnterModal() {
+  if (m_modal++ == 0) SetTimer(m_hwnd, kModalTimer, 15, nullptr);
+}
+
+void GlassWindow::LeaveModal() {
+  if (m_modal > 0 && --m_modal == 0) KillTimer(m_hwnd, kModalTimer);
+}
+
 void GlassWindow::Frame() {
+  if (m_inFrame) return;
+  m_inFrame = true;
+  struct Done {
+    bool& f;
+    ~Done() { f = false; }
+  } done{m_inFrame};
   LARGE_INTEGER now;
   QueryPerformanceCounter(&now);
   float dt = (float)((now.QuadPart - m_qpcLast.QuadPart) / (double)m_qpcFreq.QuadPart);
@@ -336,8 +353,14 @@ void GlassWindow::Frame() {
   m_gpu->painter.Paint(m_gpu->back.Get(), s, m, m_layout, m_ui);
   m_ui.listTitleR = m_gpu->painter.ListTitleRight();
   if (m.quickSettingsOpen) {
-    m_gpu->scene.RenderOverlay(m_gpu->rtv.Get(), m_gpu->w, m_gpu->h, s, m, m_layout, o);
+    m_gpu->scene.RenderOverlay(m_gpu->rtv.Get(), m_gpu->w, m_gpu->h, s, m, m_layout, o, m_layout.quick, 0.40f,
+                               kPanelRadius);
     m_gpu->painter.PaintQuick(m_gpu->back.Get(), s, m, m_layout, m_ui);
+  }
+  if (m_ui.menu.kind != MenuKind::None) {
+    m_gpu->scene.RenderOverlay(m_gpu->rtv.Get(), m_gpu->w, m_gpu->h, s, m, m_layout, o, MenuRect(m_layout, m_ui.menu),
+                               0.f, 14.f);
+    m_gpu->painter.PaintMenu(m_gpu->back.Get(), s, m, m_layout, m_ui);
   }
   HRESULT hr = m_gpu->swap->Present(1, 0);
   if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
@@ -421,8 +444,24 @@ LRESULT GlassWindow::Handle(UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_SIZE:
       m_ui.maximized = wp == SIZE_MAXIMIZED;
+      // Inside the sizing loop: draw the new size right away, so the window never shows a stretched frame.
+      if (m_modal > 0 && wp != SIZE_MINIMIZED) Frame();
       return 0;
+    case WM_ENTERSIZEMOVE:
+    case WM_ENTERMENULOOP:
+      EnterModal();
+      return 0;
+    case WM_EXITMENULOOP:
+      LeaveModal();
+      return 0;
+    case WM_TIMER:
+      if (wp == kModalTimer && IsWindowVisible(m_hwnd) && !IsIconic(m_hwnd)) Frame();
+      return 0;
+    case WM_ACTIVATE:
+      if (LOWORD(wp) == WA_INACTIVE) m_ui.menu = {};  // a menu closes when the window loses focus
+      break;
     case WM_EXITSIZEMOVE: {
+      LeaveModal();
       // Remember the placement (restored size in px, even when maximised).
       WINDOWPLACEMENT wpl{sizeof(wpl)};
       GetWindowPlacement(m_hwnd, &wpl);
@@ -556,7 +595,9 @@ void GlassWindow::Click(const HitResult& h, float x, float) {
       break;
     }
     case Hit::AddFolder: {
+      EnterModal();  // the folder dialog runs its own loop; keep the window alive behind it
       std::wstring path = PickFolder(m_hwnd);
+      LeaveModal();
       if (!path.empty()) {
         Action a{Act::AddFolder};
         a.text = path;
@@ -567,21 +608,20 @@ void GlassWindow::Click(const HitResult& h, float x, float) {
     case Hit::Scan: Send(Action{Act::Scan}); break;
     case Hit::ListTitle: {
       // AIMP's playlists in a menu under the title: the shown one checked, the playing one marked.
-      HMENU menu = CreatePopupMenu();
-      for (int i = 0; i < (int)m.playlists.size(); i++) {
-        std::wstring item = MenuText(m.playlists[i]);
-        if (i == m.playlistPlaying) item += L"\t\u25B6";
-        AppendMenuW(menu, MF_STRING | (i == m.playlistShown ? MF_CHECKED : 0), (UINT_PTR)i + 1, item.c_str());
+      PopupMenu menu;
+      menu.kind = MenuKind::Playlists;
+      menu.anchor = m_layout.listTitle;
+      menu.anchor.l -= 6;
+      for (int i = 0; i < (int)m.playlists.size() && i < (int)m.playlistIds.size(); i++) {
+        PopupItem it;
+        it.text = m.playlists[i];
+        it.hint = i == m.playlistPlaying ? L"играет" : L"";
+        it.key = m.playlistIds[i];
+        it.id = i;
+        it.checked = i == m.playlistShown;
+        menu.items.push_back(std::move(it));
       }
-      POINT pt{(LONG)(m_layout.listTitle.l * Scale()), (LONG)(m_layout.listTitle.b * Scale() + 2)};
-      ClientToScreen(m_hwnd, &pt);
-      int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, pt.x, pt.y, 0, m_hwnd, nullptr);
-      DestroyMenu(menu);
-      if (cmd > 0 && cmd - 1 != m.playlistShown && cmd - 1 < (int)m.playlistIds.size()) {
-        m.query.clear();
-        m_scrollTarget = m_ui.listScroll = 0;
-        Send(Action{Act::Playlist, 0, cmd - 1, m.playlistIds[cmd - 1]});
-      }
+      m_ui.menu = std::move(menu);
       break;
     }
     case Hit::NavSettings: case Hit::Settings: m.quickSettingsOpen = !m.quickSettingsOpen; break;
@@ -601,26 +641,31 @@ void GlassWindow::Click(const HitResult& h, float x, float) {
       break;
     case Hit::More: {
       // A small menu under the button: things that do not deserve a place of their own.
-      HMENU menu = CreatePopupMenu();
-      enum { kShowFile = 1, kAimpSettings, kClassic };
-      AppendMenuW(menu, MF_STRING | (m.track.path.empty() ? MF_GRAYED : 0), kShowFile, L"Показать файл в папке");
-      AppendMenuW(menu, MF_STRING, kAimpSettings, L"Все настройки AIMP\u2026");
-      AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-      AppendMenuW(menu, MF_STRING, kClassic, L"Вернуть классический AIMP");
-      POINT pt{(LONG)(m_layout.btnMore.l * Scale()), (LONG)(m_layout.btnMore.b * Scale() + 4)};
-      ClientToScreen(m_hwnd, &pt);
-      int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, pt.x, pt.y, 0, m_hwnd, nullptr);
-      DestroyMenu(menu);
-      if (cmd == kShowFile) {
-        std::wstring args = L"/select,\"" + m.track.path + L"\"";
-        ShellExecuteW(m_hwnd, nullptr, L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
-      } else if (cmd == kAimpSettings) {
-        Send(Action{Act::AimpSettings});
-      } else if (cmd == kClassic) {
-        Send(Action{Act::Classic});
-      }
+      PopupMenu menu;
+      menu.kind = MenuKind::More;
+      menu.anchor = m_layout.btnMore;
+      menu.alignRight = true;
+      auto item = [&](const wchar_t* text, int id, bool enabled = true) {
+        PopupItem it;
+        it.text = text, it.id = id, it.enabled = enabled;
+        menu.items.push_back(std::move(it));
+      };
+      item(L"Показать файл в папке", kMenuShowFile, !m.track.path.empty());
+      item(L"Все настройки AIMP\u2026", kMenuAimpSettings);
+      PopupItem sep;
+      sep.separator = true;
+      menu.items.push_back(sep);
+      item(L"Вернуть классический AIMP", kMenuClassic);
+      m_ui.menu = std::move(menu);
       break;
     }
+    case Hit::MenuItem: {
+      PopupMenu menu = std::move(m_ui.menu);
+      m_ui.menu = {};
+      RunMenu(menu, h.index);
+      break;
+    }
+    case Hit::MenuClose: m_ui.menu = {}; break;
     case Hit::Search:
       m_ui.searchFocus = true;
       // A click on the clear cross empties the box.
@@ -659,8 +704,42 @@ void GlassWindow::Click(const HitResult& h, float x, float) {
   }
 }
 
+void GlassWindow::RunMenu(const PopupMenu& menu, int item) {
+  if (item < 0 || item >= (int)menu.items.size()) return;
+  const PopupItem& it = menu.items[item];
+  if (it.separator || !it.enabled) return;
+  Model& m = m_model;
+  if (menu.kind == MenuKind::More) {
+    if (it.id == kMenuShowFile) {
+      std::wstring args = L"/select,\"" + m.track.path + L"\"";
+      ShellExecuteW(m_hwnd, nullptr, L"explorer.exe", args.c_str(), nullptr, SW_SHOWNORMAL);
+    } else if (it.id == kMenuAimpSettings) {
+      Send(Action{Act::AimpSettings});
+    } else if (it.id == kMenuClassic) {
+      Send(Action{Act::Classic});
+    }
+  } else if (menu.kind == MenuKind::Playlists && !it.checked && !it.key.empty()) {
+    m.query.clear();
+    m_scrollTarget = m_ui.listScroll = 0;
+    Send(Action{Act::Playlist, 0, it.id, it.key});
+  }
+}
+
 void GlassWindow::Key(UINT vk) {
   Model& m = m_model;
+  // An open menu has the keyboard: arrows choose, Enter runs, Esc closes.
+  if (m_ui.menu.kind != MenuKind::None) {
+    if (vk == VK_ESCAPE) {
+      m_ui.menu = {};
+    } else if (vk == VK_DOWN || vk == VK_UP) {
+      m_ui.menu.hot = MenuStep(m_ui.menu, m_ui.menu.hot, vk == VK_DOWN ? 1 : -1);
+    } else if ((vk == VK_RETURN || vk == VK_SPACE) && m_ui.menu.hot >= 0) {
+      PopupMenu menu = std::move(m_ui.menu);
+      m_ui.menu = {};
+      RunMenu(menu, menu.hot);
+    }
+    return;
+  }
   const bool ctrl = GetKeyState(VK_CONTROL) < 0;
   if (ctrl && vk == 'F') {
     m_ui.searchFocus = true;

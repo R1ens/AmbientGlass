@@ -5,6 +5,7 @@
 #include <memory>
 
 #include "../../aimp/core/model.h"
+#include "../../aimp/core/ui_state.h"
 #include "../../aimp/core/palette.h"
 #include "../../aimp/core/search.h"
 #include "../../aimp/core/ui_text.h"
@@ -108,6 +109,23 @@ inline glass::Model MakeModel(int variant = 0) {
   if (variant == 8 || variant == 9) m.settings.mono = 100;  // black and silver
   m.bpm = 124, m.loud = 0.8f;
   return m;
+}
+
+// The "⋯" menu open, as the window builds it: for the demo and golden shots.
+inline glass::UiState MoreMenuOpen(unsigned w, unsigned h, float scale) {
+  glass::Layout L = glass::ComputeLayout(w / scale, h / scale);
+  glass::UiState s;
+  s.menu.kind = glass::MenuKind::More;
+  s.menu.anchor = L.btnMore;
+  s.menu.alignRight = true;
+  for (const wchar_t* t : {L"Показать файл в папке", L"Все настройки AIMP\u2026", L"", L"Вернуть классический AIMP"}) {
+    glass::PopupItem it;
+    it.text = t;
+    it.separator = !*t;
+    s.menu.items.push_back(it);
+  }
+  s.menu.hot = 1;
+  return s;
 }
 
 }  // namespace demo

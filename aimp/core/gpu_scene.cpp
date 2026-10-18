@@ -78,8 +78,10 @@ bool GpuScene::Init(ID3D11Device* device, ID3D11DeviceContext* ctx, std::wstring
 bool GpuScene::Ensure(UINT w, UINT h) {
   if (w == m_w && h == m_h && m_rib.tex) return true;
   m_w = m_h = 0;
-  // Ribbons at half size (they are soft anyway), the glass background at an eighth.
-  UINT rw = std::max(1u, (w + 1) / 2), rh = std::max(1u, (h + 1) / 2);
+  // Ribbons at full size, so thin rays and filaments stay crisp (half size only above ~4 MP, where pixels are
+  // small anyway); the glass background at an eighth.
+  const bool full = (uint64_t)w * h <= 4200000;
+  UINT rw = full ? w : std::max(1u, (w + 1) / 2), rh = full ? h : std::max(1u, (h + 1) / 2);
   UINT sw = std::max(1u, (w + 7) / 8), sh = std::max(1u, (h + 7) / 8);
   if (!MakeTex(m_device.Get(), m_rib, rw, rh, 0, kHdr) || !MakeTex(m_device.Get(), m_small, sw, sh, 1, kHdr) ||
       !MakeTex(m_device.Get(), m_tmp, sw, sh, 1, kHdr) || !MakeTex(m_device.Get(), m_glass, sw, sh, 1, kHdr))
@@ -178,13 +180,15 @@ void GpuScene::Render(ID3D11RenderTargetView* rtv, UINT w, UINT h, float scale, 
 }
 
 void GpuScene::RenderOverlay(ID3D11RenderTargetView* rtv, UINT w, UINT h, float scale, const Model& m,
-                             const Layout& L, const SceneOptions& o) {
+                             const Layout& L, const SceneOptions& o, const Rc& panel, float veil, float radius) {
   if (!m_rib.tex || w != m_w || h != m_h) return;
   GlassCB cb{};
   FillCommon(cb, w, h, scale, m, L, o);
-  SetRc(cb.panels[0], L.quick, scale);
+  SetRc(cb.panels[0], panel, scale);
   cb.info[0] = 1;
-  cb.dim[0] = 0.40f;
+  cb.dim[0] = veil;
+  cb.panelSt[0] = radius * scale;
+  cb.fx[0] = 1;  // frosted, whatever the panels below are
   const float factor[4] = {0, 0, 0, 0};
   m_ctx->OMSetBlendState(m_blend.Get(), factor, 0xFFFFFFFF);
   m_pass.Pass(rtv, w, h, m_psOverlay.Get(), {m_rib.srv.Get(), m_glass.srv.Get(), m_coverSrv.Get()}, &cb);

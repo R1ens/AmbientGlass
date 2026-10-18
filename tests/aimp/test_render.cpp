@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "../../aimp/core/layout.h"
+#include "../../aimp/core/ui_state.h"
 #include "../test_framework.h"
 #include "demo_model.h"
 #include "render_util.h"
@@ -133,6 +134,38 @@ TEST(render_black_and_silver_has_no_colour_in_the_background) {
       chroma += mx - mn, n++;
     }
   CHECK(chroma / n < 4);  // only the faint cool cast of silver
+}
+
+TEST(render_menu_is_drawn_inside_the_window_without_dimming_it) {
+  if (!rt::Warp()) return;
+  glass::Model m = demo::MakeModel(0);
+  glass::Layout L = glass::ComputeLayout(kW, kH);
+  glass::UiState s;
+  s.menu.kind = glass::MenuKind::More;
+  s.menu.anchor = L.btnMore;
+  s.menu.alignRight = true;
+  for (const wchar_t* t : {L"Показать файл в папке", L"Все настройки AIMP", L"Вернуть классический AIMP"}) {
+    glass::PopupItem it;
+    it.text = t;
+    s.menu.items.push_back(it);
+  }
+  rt::Image plain, open;
+  plain.w = open.w = kW, plain.h = open.h = kH;
+  glass::SceneOptions o;
+  o.dither = 0;
+  rt::Warp()->Render(m, kW, kH, 1.f, o, true, plain.bgra);
+  rt::Warp()->Render(m, kW, kH, 1.f, o, true, open.bgra, &s);
+  auto diff = [&](const glass::Rc& r) {
+    double d = 0;
+    int n = 0;
+    for (UINT y = (UINT)std::max(0.f, r.t); y < (UINT)std::min((float)kH, r.b); y += 2)
+      for (UINT x = (UINT)std::max(0.f, r.l); x < (UINT)std::min((float)kW, r.r); x += 2)
+        d += std::fabs(open.Luma(x, y) - plain.Luma(x, y)), n++;
+    return n ? d / n : 0;
+  };
+  glass::Rc menu = glass::MenuRect(L, s.menu);
+  CHECK(diff(menu) > 4);                            // the menu is there
+  CHECK(diff(glass::Rc{0, 0, 200, 200}) < 0.5);      // the rest of the window keeps its brightness
 }
 
 TEST(render_light_theme_in_black_and_silver_is_dark) {

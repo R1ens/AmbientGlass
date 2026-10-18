@@ -21,7 +21,7 @@ constexpr wchar_t kIcHeart = 0xEB51, kIcHeartFill = 0xEB52, kIcMore = 0xE712, kI
 constexpr wchar_t kIcSearch = 0xE721, kIcVolume = 0xE767, kIcMute = 0xE74F, kIcFolder = 0xE8B7;
 constexpr wchar_t kIcPlaylist = 0xE90B, kIcRecent = 0xE81C, kIcAdd = 0xE710, kIcRefresh = 0xE72C;
 constexpr wchar_t kIcMin = 0xE921, kIcMax = 0xE922, kIcRestore = 0xE923, kIcClose = 0xE8BB, kIcMusic = 0xE8D6;
-constexpr wchar_t kIcCancel = 0xE711, kIcAudio = 0xE189, kIcChevronDown = 0xE70D;
+constexpr wchar_t kIcCancel = 0xE711, kIcAudio = 0xE189, kIcChevronDown = 0xE70D, kIcCheck = 0xE73E;
 
 D2D1_COLOR_F C(float r, float g, float b, float a = 1) { return D2D1::ColorF(r, g, b, a); }
 D2D1_COLOR_F Hex(uint32_t v, float a = 1) {
@@ -236,6 +236,12 @@ void UiPainter::Paint(ID3D11Texture2D* target, float scale, const Model& m, cons
 void UiPainter::PaintQuick(ID3D11Texture2D* target, float scale, const Model& m, const Layout& L, const UiState& s) {
   if (!Begin(target, scale, m)) return;
   Quick(m, L, s);
+  End();
+}
+
+void UiPainter::PaintMenu(ID3D11Texture2D* target, float scale, const Model& m, const Layout& L, const UiState& s) {
+  if (s.menu.kind == MenuKind::None || !Begin(target, scale, m)) return;
+  Menu(L, s);
   End();
 }
 
@@ -693,6 +699,27 @@ void UiPainter::Bottom(const Model& m, const Layout& L, const UiState& s) {
   RoundFill(st, 11, Solid(C(1, 1, 1, hov(Hit::Settings) || m.quickSettingsOpen ? 0.12f : 0.04f)));
   RoundStroke(st, 11, m_light ? C(0, 0, 0, 0.12f) : C(1, 1, 1, 0.14f));
   Icon(kIcSettings, st, 15, m_dim);
+}
+
+void UiPainter::Menu(const Layout& L, const UiState& s) {
+  // The glass is drawn by the GPU scene; here: items, checks, hints, separators, the highlighted item.
+  const PopupMenu& menu = s.menu;
+  const int hot = s.hover.hit == Hit::MenuItem ? s.hover.index : menu.hot;
+  const D2D1_COLOR_F faint = m_light ? C(0, 0, 0, 0.08f) : C(1, 1, 1, 0.10f);
+  for (int i = 0; i < (int)menu.items.size(); i++) {
+    const PopupItem& it = menu.items[i];
+    const Rc r = MenuItemRect(L, menu, i);
+    if (it.separator) {
+      m_dc->FillRectangle(D2D1::RectF(r.l + 10, r.Cy() - 0.5f, r.r - 10, r.Cy() + 0.5f), Solid(faint));
+      continue;
+    }
+    if (i == hot && it.enabled) RoundFill(r, 9, Solid(m_light ? C(0, 0, 0, 0.06f) : C(1, 1, 1, 0.09f)));
+    if (it.checked) Icon(kIcCheck, Rc{r.l + 6, r.t, r.l + 26, r.b}, 11, m_light ? m_text : C(1, 1, 1, 0.9f));
+    Text(it.text, Rc{r.l + 32, r.t, r.r - (it.hint.empty() ? 12 : 70), r.b}, 13,
+         it.enabled ? m_text : WithA(m_text, 0.35f), it.checked ? DWRITE_FONT_WEIGHT_SEMI_BOLD : DWRITE_FONT_WEIGHT_NORMAL);
+    if (!it.hint.empty())
+      Text(it.hint, Rc{r.r - 70, r.t, r.r - 12, r.b}, 11, m_dim, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING);
+  }
 }
 
 void UiPainter::Quick(const Model& m, const Layout& L, const UiState& s) {
