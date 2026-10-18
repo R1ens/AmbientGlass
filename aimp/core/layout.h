@@ -28,7 +28,10 @@ struct Layout {
   Rc addBox, btnAddFolder, btnScan, navSettings;
 
   Rc card;  // "now playing" glass panel
-  Rc cover, coverGlow, spectrum;
+  Rc cover, coverGlow;
+  Rc format;    // "FLAC | 44.1 kHz | 16 bit | 867 kbps" under the artist, or between the times in a short card
+  bool formatInTimes = false;
+  Rc spectrum;  // right of the cover, between the track text and the waveform; invalid when there is no room
   Rc info, badge, title, artist;
   Rc waveTimes, wave;
   Rc btnShuffle, btnPrev, btnPlay, btnNext, btnRepeat, btnLike, btnMore;

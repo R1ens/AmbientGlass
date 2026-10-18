@@ -135,6 +135,23 @@ TEST(render_black_and_silver_has_no_colour_in_the_background) {
   CHECK(chroma / n < 4);  // only the faint cool cast of silver
 }
 
+TEST(render_light_theme_in_black_and_silver_is_dark) {
+  if (!rt::Warp()) return;
+  glass::Model m = demo::MakeModel(5);  // light theme
+  rt::Image light = Render(m, false);
+  m.settings.mono = 100;
+  rt::Image mono = Render(m, false);
+  auto mean = [](const rt::Image& img) {
+    double s = 0;
+    int n = 0;
+    for (UINT y = 0; y < kH; y += 4)
+      for (UINT x = 0; x < kW; x += 4) s += img.Luma(x, y), n++;
+    return s / n;
+  };
+  CHECK(mean(light) > 150);
+  CHECK(mean(mono) < 60);  // black background: the interface's light text stays readable
+}
+
 TEST(render_glass_stays_dark) {
   if (!rt::Warp()) return;
   glass::Model m = demo::MakeModel(0);

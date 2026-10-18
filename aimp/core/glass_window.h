@@ -24,7 +24,7 @@ enum class Act {
   PlayPause, Next, Prev, Seek, Volume, Shuffle, Repeat,
   PlayRow,          // index: Model::rows index
   Nav,              // index: Nav
-  Playlist,         // index: AIMP's loaded playlist to show
+  Playlist,         // text: id of AIMP's loaded playlist to show
   Like,
   AddFolder,        // text: chosen folder
   Scan,

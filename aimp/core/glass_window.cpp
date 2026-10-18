@@ -300,20 +300,16 @@ void GlassWindow::Frame() {
 
   // Animated values for this frame.
   Model m = m_model;
+  AudioFrame a = m_audio.Snapshot();
   // The background's own clock runs faster for faster music (smoothly, so a tempo change never jolts it).
-  {
-    AudioFrame af = m_audio.Snapshot();
-    float target = af.bpm > 0 ? std::clamp(af.bpm / 120.f, 0.65f, 1.5f) : 1.f;
-    m_rate += (target - m_rate) * (1 - std::exp(-dt / 1.5f));
-    if (m_model.state == PlayState::Playing) m_animClock += dt * m_rate;
-    else m_animClock += dt * 0.6;  // paused: slow breathing
-  }
+  const float target = a.bpm > 0 ? std::clamp(a.bpm / 120.f, 0.65f, 1.5f) : 1.f;
+  m_rate += (target - m_rate) * (1 - std::exp(-dt / 1.5f));
+  m_animClock += dt * (m_model.state == PlayState::Playing ? m_rate : 0.6);  // paused: slow breathing
   m.time = (float)m_animClock;
   if (m.state == PlayState::Playing && m.track.duration > 0)
     m.position = std::min(m.track.duration, m_posBase + (m_clock - m_posAt));
   m_palT = std::min(1.f, m_palT + dt / 0.6f);
   m.palette = MixPalettes(m_palFrom, m_palTo, m_palT * m_palT * (3 - 2 * m_palT));
-  AudioFrame a = m_audio.Snapshot();
   const float beat = m.settings.beat / 100.f;
   for (int i = 0; i < SpectrumBars::kCount; i++) m.spectrum.level[i] = a.bars[i];
   m.bass = std::min(1.f, a.bass * beat), m.high = std::min(1.f, a.high * beat), m.pulse = std::min(1.f, a.pulse * beat);
@@ -338,6 +334,7 @@ void GlassWindow::Frame() {
   o.seed = (uint32_t)(m_clock * 60);
   m_gpu->scene.Render(m_gpu->rtv.Get(), m_gpu->w, m_gpu->h, s, m, m_layout, o);
   m_gpu->painter.Paint(m_gpu->back.Get(), s, m, m_layout, m_ui);
+  m_ui.listTitleR = m_gpu->painter.ListTitleRight();
   if (m.quickSettingsOpen) {
     m_gpu->scene.RenderOverlay(m_gpu->rtv.Get(), m_gpu->w, m_gpu->h, s, m, m_layout, o);
     m_gpu->painter.PaintQuick(m_gpu->back.Get(), s, m, m_layout, m_ui);
@@ -471,7 +468,6 @@ LRESULT GlassWindow::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       return 0;
     }
     case WM_LBUTTONUP: {
-      ReleaseCapture();
       float x = GET_X_LPARAM(lp) / s, y = GET_Y_LPARAM(lp) / s;
       HitResult up = HitTest(m_layout, m_model, m_ui, x, y);
       if (m_ui.draggingWave) {
@@ -490,8 +486,18 @@ LRESULT GlassWindow::Handle(UINT msg, WPARAM wp, LPARAM lp) {
         Click(up, x, y);
       }
       m_ui.pressed = {};
+      ReleaseCapture();  // after the drags have ended, so WM_CAPTURECHANGED finds nothing to cancel
       return 0;
     }
+    case WM_CAPTURECHANGED:
+      // Another window took the mouse mid-drag (a menu, Alt+Tab): no button-up will come. A slider keeps
+      // where it was dragged to; a wave drag is dropped without seeking.
+      if ((HWND)lp != m_hwnd) {
+        if (m_ui.draggingSlider) SettingsChanged();
+        m_ui.draggingWave = m_ui.draggingVolume = m_ui.draggingSlider = false;
+        m_ui.pressed = {};
+      }
+      return 0;
     case WM_MOUSEWHEEL: {
       POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
       ScreenToClient(m_hwnd, &pt);
@@ -563,7 +569,7 @@ void GlassWindow::Click(const HitResult& h, float x, float) {
       // AIMP's playlists in a menu under the title: the shown one checked, the playing one marked.
       HMENU menu = CreatePopupMenu();
       for (int i = 0; i < (int)m.playlists.size(); i++) {
-        std::wstring item = m.playlists[i];
+        std::wstring item = MenuText(m.playlists[i]);
         if (i == m.playlistPlaying) item += L"\t\u25B6";
         AppendMenuW(menu, MF_STRING | (i == m.playlistShown ? MF_CHECKED : 0), (UINT_PTR)i + 1, item.c_str());
       }
@@ -571,10 +577,10 @@ void GlassWindow::Click(const HitResult& h, float x, float) {
       ClientToScreen(m_hwnd, &pt);
       int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, pt.x, pt.y, 0, m_hwnd, nullptr);
       DestroyMenu(menu);
-      if (cmd > 0 && cmd - 1 != m.playlistShown) {
+      if (cmd > 0 && cmd - 1 != m.playlistShown && cmd - 1 < (int)m.playlistIds.size()) {
         m.query.clear();
         m_scrollTarget = m_ui.listScroll = 0;
-        Send(Action{Act::Playlist, 0, cmd - 1});
+        Send(Action{Act::Playlist, 0, cmd - 1, m.playlistIds[cmd - 1]});
       }
       break;
     }

@@ -85,6 +85,17 @@ int RowAt(const Layout& L, const UiState& s, int rowCount, float y) {
 
 float Fraction(const Rc& r, float x) { return r.W() > 0 ? std::clamp((x - r.l) / r.W(), 0.f, 1.f) : 0.f; }
 
+std::wstring MenuText(const std::wstring& s) {
+  std::wstring out;
+  out.reserve(s.size());
+  for (wchar_t c : s) {
+    if (c == L'\t') c = L' ';  // a tab would start the right-aligned column
+    out += c;
+    if (c == L'&') out += L'&';
+  }
+  return out;
+}
+
 HitResult HitTest(const Layout& L, const Model& m, const UiState& s, float x, float y) {
   auto in = [&](const Rc& r) { return r.Valid() && r.Contains(x, y); };
   auto round = [&](const Rc& r) {  // circular buttons: corners do not count
@@ -137,7 +148,8 @@ HitResult HitTest(const Layout& L, const Model& m, const UiState& s, float x, fl
 
   if (in(L.search)) return {Hit::Search};
   // The list title chooses among AIMP's playlists (only in the Playlists view, when there is a choice).
-  if (m.nav == Nav::Playlists && m.playlists.size() > 1 && in(L.listTitle)) return {Hit::ListTitle};
+  if (m.nav == Nav::Playlists && m.playlists.size() > 1 && in(L.listTitle) && (s.listTitleR <= 0 || x <= s.listTitleR))
+    return {Hit::ListTitle};
   if (in(L.rows)) {
     int r = RowAt(L, s, (int)m.visible.size(), y);
     return r >= 0 ? HitResult{Hit::Row, r} : HitResult{Hit::ListBackground};

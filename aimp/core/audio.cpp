@@ -57,7 +57,7 @@ void AudioAnalyzer::Feed(const float* s, float dtMs) {
   m_frame.pulse = b.pulse;
   if (b.beat) {
     m_frame.beats++;
-    float iv = m_now - m_lastBeat;
+    float iv = (float)(m_now - m_lastBeat);
     if (iv >= 250 && iv <= 1500) {
       m_intervals[m_intervalHead] = iv;
       m_intervalHead = (m_intervalHead + 1) % 16;
@@ -67,10 +67,7 @@ void AudioAnalyzer::Feed(const float* s, float dtMs) {
     }
     m_lastBeat = m_now;
   }
-  if (m_now - m_lastBeat > 6000) {  // no beat for a while: the tempo is no longer known
-    m_frame.bpm = 0;
-    m_intervalCount = m_intervalHead = 0;
-  }
+  if (m_now - m_lastBeat > 6000) ForgetTempo();  // no beat for a while: the tempo is no longer known
 
   // Loudness relative to the loudest moment of the last ~10 s; slow to follow so it never twitches.
   float e = 0;
@@ -86,6 +83,19 @@ void AudioAnalyzer::Silence(float dtMs) {
   float k = std::exp(-std::clamp(dtMs, 0.f, 200.f) / 180.f);
   for (float& v : m_frame.bars) v *= k;
   m_frame.bass *= k, m_frame.high *= k, m_frame.pulse *= k, m_frame.loud *= k;
+  ForgetTempo();
+}
+
+void AudioAnalyzer::NewTrack() {
+  std::lock_guard<std::mutex> lock(m_mu);
+  ForgetTempo();
+  m_lastBeat = -1e12;   // the first beat of the new track starts no interval
+  m_loudPeak = 1e-6f;   // loudness relative to this track's own loudest
+}
+
+void AudioAnalyzer::ForgetTempo() {
+  m_frame.bpm = 0;
+  m_intervalCount = m_intervalHead = 0;
 }
 
 AudioFrame AudioAnalyzer::Snapshot() const {

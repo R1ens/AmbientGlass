@@ -193,7 +193,7 @@ bool UiPainter::Begin(ID3D11Texture2D* target, float scale, const Model& m) {
   m_dc->SetTarget(m_target.Get());
   m_dc->SetDpi(96.f * scale, 96.f * scale);  // draw in layout units
 
-  m_light = m.theme == Theme::Light;
+  m_light = LightLook(m);
   m_a0 = FromRgb(m.palette.accent[0]);
   m_a1 = FromRgb(m.palette.accent[1]);
   m_a2 = FromRgb(m.palette.accent[2]);
@@ -357,22 +357,7 @@ void UiPainter::Card(const Model& m, const Layout& L, const UiState& s) {
   m_dc->DrawGeometry(clip.Get(), Solid(C(1, 1, 1, 0.12f)), 1);
   if (s.hover.hit == Hit::Cover) m_dc->FillGeometry(clip.Get(), Solid(C(1, 1, 1, 0.05f)));
 
-  // Spectrum: light bars under the cover, the real spectrum of the music.
-  if (m.settings.spectrum) {
-    const Rc& sp = L.spectrum;
-    const int n = SpectrumBars::kCount;
-    const float gap = 3, bw = std::min(10.f, (sp.W() - 16 - gap * (n - 1)) / n);
-    const float total = n * bw + (n - 1) * gap, x0 = sp.Cx() - total / 2;
-    const bool playing = m.state == PlayState::Playing;
-    auto g = Gradient(sp, m_a0, m_a1, true);
-    for (int i = 0; i < n; i++) {
-      float lv = playing ? m.spectrum.level[i] : 0.12f;
-      float h = std::max(6.f, lv * sp.H());
-      Rc b = Box(x0 + i * (bw + gap), sp.b - h, bw, h);
-      g->SetOpacity(playing ? 0.95f : 0.4f);
-      RoundFill(b, std::min(4.f, bw / 2), g.Get());
-    }
-  }
+  if (m.settings.spectrum && L.spectrum.Valid()) Spectrum(m, L.spectrum);
 
   // Badge, title, artist.
   if (L.badge.Valid()) {
@@ -394,6 +379,12 @@ void UiPainter::Card(const Model& m, const Layout& L, const UiState& s) {
   std::wstring artist = ArtistLine(m.track, L" • ");
   if (artist.empty() && m.track.title.empty()) artist = L"Выберите трек в плейлисте";
   Text(artist, L.artist, 15, m_dim, DWRITE_FONT_WEIGHT_MEDIUM);
+  if (L.format.Valid()) {
+    std::wstring f = FormatLine(m.track);
+    if (!f.empty())
+      Text(f, L.format, L.formatInTimes ? 11.f : 12.f, WithA(m_dim, m_dim.a * 0.85f), DWRITE_FONT_WEIGHT_NORMAL,
+           L.formatInTimes ? DWRITE_TEXT_ALIGNMENT_CENTER : DWRITE_TEXT_ALIGNMENT_LEADING, false, 0.3f);
+  }
 
   // Times above the waveform.
   double pos = s.draggingWave ? s.dragValue * m.track.duration : m.position;
@@ -423,6 +414,61 @@ void UiPainter::Card(const Model& m, const Layout& L, const UiState& s) {
   RoundFill(mo, 11, Solid(C(1, 1, 1, hov(Hit::More) ? 0.10f : 0.04f)));
   RoundStroke(mo, 11, m_light ? C(0, 0, 0, 0.12f) : C(1, 1, 1, 0.14f));
   Icon(kIcMore, mo, 15, m_dim);
+}
+
+// The spectrum, lows on the left: a smooth glowing curve through the 48 bands over a soft fill and fine bars.
+// Paused or stopped, it settles into a calm low line.
+void UiPainter::Spectrum(const Model& m, const Rc& sp) {
+  constexpr int n = SpectrumBars::kCount;
+  const bool playing = m.state == PlayState::Playing;
+  D2D1_POINT_2F pt[n];
+  for (int i = 0; i < n; i++) {
+    float lv = playing ? std::clamp(m.spectrum.level[i], 0.f, 1.f) : 0.06f + 0.025f * std::sin(i * 0.45f + m_time * 1.2f);
+    pt[i] = D2D1::Point2F(sp.l + sp.W() * i / (n - 1), sp.b - std::max(1.5f, lv * (sp.H() - 4)));
+  }
+  // Catmull-Rom through the points as cubic Beziers, kept inside the box.
+  auto curve = [&](ID2D1GeometrySink* k) {
+    for (int i = 0; i + 1 < n; i++) {
+      const D2D1_POINT_2F &p0 = pt[std::max(i - 1, 0)], &p1 = pt[i], &p2 = pt[i + 1], &p3 = pt[std::min(i + 2, n - 1)];
+      auto clampY = [&](float y) { return std::clamp(y, sp.t, sp.b); };
+      k->AddBezier(D2D1::BezierSegment(D2D1::Point2F(p1.x + (p2.x - p0.x) / 6, clampY(p1.y + (p2.y - p0.y) / 6)),
+                                       D2D1::Point2F(p2.x - (p3.x - p1.x) / 6, clampY(p2.y - (p3.y - p1.y) / 6)), p2));
+    }
+  };
+  ComPtr<ID2D1PathGeometry> area, line;
+  ComPtr<ID2D1GeometrySink> k;
+  if (SUCCEEDED(m_factory->CreatePathGeometry(&area)) && SUCCEEDED(area->Open(&k))) {
+    k->BeginFigure(D2D1::Point2F(sp.l, sp.b), D2D1_FIGURE_BEGIN_FILLED);
+    k->AddLine(pt[0]);
+    curve(k.Get());
+    k->AddLine(D2D1::Point2F(sp.r, sp.b));
+    k->EndFigure(D2D1_FIGURE_END_CLOSED);
+    k->Close();
+  }
+  k.Reset();
+  if (SUCCEEDED(m_factory->CreatePathGeometry(&line)) && SUCCEEDED(line->Open(&k))) {
+    k->BeginFigure(pt[0], D2D1_FIGURE_BEGIN_HOLLOW);
+    curve(k.Get());
+    k->EndFigure(D2D1_FIGURE_END_OPEN);
+    k->Close();
+  }
+  const float a = playing ? 1.f : 0.5f;
+  // Fine bars, one per band, fading downwards.
+  auto bars = Gradient(sp, WithA(m_a0, 0.50f * a), WithA(m_a1, 0.04f * a), true);
+  const float bw = std::clamp(sp.W() / n * 0.28f, 1.5f, 3.f);
+  for (int i = 0; i < n; i++) {
+    Rc b = Rc{pt[i].x - bw / 2, pt[i].y + 3, pt[i].x + bw / 2, sp.b};
+    if (b.H() > 1) RoundFill(b, bw / 2, bars.Get());
+  }
+  // Soft fill under the curve, then the curve with a glow.
+  if (area) m_dc->FillGeometry(area.Get(), Gradient(sp, WithA(m_a0, 0.26f * a), WithA(m_a1, 0.0f), true).Get());
+  if (line) {
+    auto stroke = Gradient(sp, WithA(m_a0, a), WithA(m_a1, a));
+    stroke->SetOpacity(0.18f);
+    m_dc->DrawGeometry(line.Get(), stroke.Get(), 7);
+    stroke->SetOpacity(0.95f);
+    m_dc->DrawGeometry(line.Get(), stroke.Get(), 2);
+  }
 }
 
 void UiPainter::WaveBar(const Model& m, const Layout& L, const UiState& s) {
@@ -472,6 +518,7 @@ void UiPainter::List(const Model& m, const Layout& L, const UiState& s) {
   std::wstring title = m.listTitle.empty() ? L"ПЛЕЙЛИСТ" : m.listTitle;
   Rc tr = Rc{h.l + 4, h.t, L.search.l - 12, h.b};
   const bool chooser = m.nav == Nav::Playlists && m.playlists.size() > 1;
+  m_listTitleR = 0;
   float titleW = 0;
   if (IDWriteTextFormat* f = Format(12, DWRITE_FONT_WEIGHT_BOLD)) {
     ComPtr<IDWriteTextLayout> lay;
@@ -484,6 +531,7 @@ void UiPainter::List(const Model& m, const Layout& L, const UiState& s) {
   if (chooser) {
     // The title is a button: a pill on hover and a chevron after it.
     Rc pill = Rc{tr.l - 6, h.t + 2, tr.l + titleW + 26, h.b - 2};
+    m_listTitleR = pill.r;
     if (s.hover.hit == Hit::ListTitle) RoundFill(pill, 8, Solid(m_light ? C(0, 0, 0, 0.06f) : C(1, 1, 1, 0.08f)));
     Text(title, Rc{tr.l, h.t, tr.l + titleW + 2, h.b}, 12, m_text, DWRITE_FONT_WEIGHT_BOLD,
          DWRITE_TEXT_ALIGNMENT_LEADING, false, 0.5f);
@@ -679,7 +727,7 @@ void UiPainter::Quick(const Model& m, const Layout& L, const UiState& s) {
       case QuickItem::Equalizer: label = L"Эквалайзер"; on = m.aimpEq; break;
       case QuickItem::Background: label = L"Живой фон"; on = m.settings.background; break;
       case QuickItem::CoverGlow: label = L"Свечение обложки"; on = m.settings.coverGlow; break;
-      case QuickItem::Spectrum: label = L"Спектр под обложкой"; on = m.settings.spectrum; break;
+      case QuickItem::Spectrum: label = L"Спектр"; on = m.settings.spectrum; break;
       case QuickItem::Ribbons: label = L"Яркость лент"; value = m.settings.ribbons; break;
       case QuickItem::Beat: label = L"Реакция на бит"; value = m.settings.beat; break;
       case QuickItem::Frost: label = L"Матовость стекла"; value = m.settings.frost; break;

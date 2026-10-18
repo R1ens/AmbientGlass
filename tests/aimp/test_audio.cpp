@@ -23,13 +23,13 @@ TEST(audio_tone_lights_its_bar) {
   AudioAnalyzer a;
   std::vector<float> s(kSpectrumBins, 0.f);
   int from, to;
-  AudioAnalyzer::BarBins(9, from, to);
+  AudioAnalyzer::BarBins(24, from, to);
   for (int k = from; k < to; k++) s[k] = 50.f;
   for (int f = 0; f < 30; f++) a.Feed(s.data(), 33.f);
   AudioFrame fr = a.Snapshot();
-  CHECK(fr.bars[9] > 0.9f);
-  CHECK(fr.bars[2] < 0.05f);
-  CHECK(fr.bars[16] < 0.05f);
+  CHECK(fr.bars[24] > 0.9f);
+  CHECK(fr.bars[6] < 0.05f);
+  CHECK(fr.bars[42] < 0.05f);
 }
 
 namespace {
@@ -63,6 +63,22 @@ TEST(audio_tempo_folds_fast_kicks_and_forgets_after_silence) {
   CHECK_NEAR(fr.bpm, 100.f, 5.f);
   std::vector<float> s(kSpectrumBins, 0.f);
   for (int f = 0; f < 240; f++) a.Feed(s.data(), 33.3f);  // 8 s of silence
+  CHECK_EQ(a.Snapshot().bpm, 0.f);
+}
+
+TEST(audio_new_track_measures_its_own_tempo) {
+  AudioAnalyzer a;
+  CHECK_NEAR(RunKicks(a, 60000.f / 90.f, 12.f).bpm, 90.f, 4.f);
+  a.NewTrack();
+  CHECK_EQ(a.Snapshot().bpm, 0.f);
+  // A few beats of the next track are enough: the previous track's intervals are gone.
+  CHECK_NEAR(RunKicks(a, 60000.f / 150.f, 3.f).bpm, 150.f, 6.f);
+}
+
+TEST(audio_stop_forgets_the_tempo) {
+  AudioAnalyzer a;
+  CHECK(RunKicks(a, 500.f, 8.f).bpm > 0);
+  a.Silence(200);
   CHECK_EQ(a.Snapshot().bpm, 0.f);
 }
 

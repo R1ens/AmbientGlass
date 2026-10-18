@@ -61,6 +61,7 @@ struct UiState {
   bool maximized = false;
   bool draggingWave = false, draggingVolume = false, draggingSlider = false;
   float dragValue = 0;       // 0..1 while dragging the wave or volume
+  float listTitleR = 0;      // right edge of the drawn playlist chooser button; 0 = all of L.listTitle
 };
 
 HitResult HitTest(const Layout& L, const Model& m, const UiState& s, float x, float y);
@@ -72,5 +73,8 @@ float MaxScroll(const Layout& L, int rowCount);
 
 // Position along a horizontal control, 0..1.
 float Fraction(const Rc& r, float x);
+
+// Text for a Win32 menu item shown as is: "&" would otherwise underline the next letter.
+std::wstring MenuText(const std::wstring& s);
 
 }  // namespace glass

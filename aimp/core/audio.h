@@ -1,6 +1,6 @@
 #pragma once
-// Turns the player's spectrum frames (any thread, ~30 per second) into what the window animates: 18 light bars
-// under the cover and the beat for the background. The window reads the latest snapshot every frame.
+// Turns the player's spectrum frames (any thread, ~30 per second) into what the window animates: the 48 bands
+// of the spectrum next to the cover and the beat for the background. The window reads the latest snapshot every frame.
 
 #include <mutex>
 
@@ -21,8 +21,10 @@ class AudioAnalyzer {
  public:
   // spectrum: 256 bins (see beat.h); dtMs since the previous frame.
   void Feed(const float* spectrum, float dtMs);
-  // Silence (stopped player): everything decays to zero.
+  // Silence (stopped player): everything decays to zero, and the tempo is forgotten.
   void Silence(float dtMs);
+  // A new track: its tempo and loudness are measured afresh, not mixed with the previous track's.
+  void NewTrack();
   AudioFrame Snapshot() const;
 
   // First and one-past-last spectrum bin of bar i: log-spaced from ~40 Hz to ~16 kHz.
@@ -33,7 +35,10 @@ class AudioAnalyzer {
   BeatDetector m_beat;
   AudioFrame m_frame;
   float m_peak[SpectrumBars::kCount] = {};
-  float m_now = 0, m_lastBeat = -1e9f, m_loudPeak = 1e-6f;
+  void ForgetTempo();  // m_mu held
+
+  double m_now = 0, m_lastBeat = -1e12;  // ms of fed audio (double: hours of playback keep ms precision)
+  float m_loudPeak = 1e-6f;
   float m_intervals[16] = {};
   int m_intervalCount = 0, m_intervalHead = 0;
 };

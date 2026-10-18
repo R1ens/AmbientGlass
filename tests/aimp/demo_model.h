@@ -50,6 +50,7 @@ inline glass::Model MakeModel(int variant = 0) {
   m.track.artist = L"Lumen Coast";
   m.track.album = L"Ночные огни";
   m.track.duration = 227;
+  m.track.format = L"FLAC", m.track.sampleRate = 44100, m.track.bits = 16, m.track.bitrate = 867;
   m.track.favorite = variant == 2;
   m.state = variant == 3 ? PlayState::Paused : PlayState::Playing;
   m.position = 84;
@@ -69,8 +70,13 @@ inline glass::Model MakeModel(int variant = 0) {
   m.palette = ExtractPalette(m.cover->rgba.data(), m.cover->w, m.cover->h, m.cover->w * 4);
   m.bass = 0.6f, m.high = 0.4f, m.pulse = variant == 0 ? 0.8f : 0.2f;
   m.time = 12.5f;
-  for (int i = 0; i < SpectrumBars::kCount; i++)
-    m.spectrum.level[i] = 0.25f + 0.7f * std::fabs(std::sin(i * 0.9f + 0.4f)) * (1.f - i / 30.f);
+  // A music-like spectrum: strong lows falling off towards the highs, with a few uneven bumps.
+  for (int i = 0; i < SpectrumBars::kCount; i++) {
+    float x = (float)i / SpectrumBars::kCount;
+    float bumps = 0.14f * std::pow(std::sin(i * 0.73f + 0.5f), 2.f) + 0.09f * std::sin(i * 1.91f + 1.3f) +
+                  0.06f * std::sin(i * 3.1f);
+    m.spectrum.level[i] = std::fmin(1.f, std::fmax(0.f, 0.20f + 0.60f * std::exp(-x * 2.4f) + bumps * (1.2f - x)));
+  }
   for (int i = 0; i < 600; i++) {
     float t = i / 600.f;
     float env = 0.35f + 0.5f * std::fabs(std::sin(t * 9.f)) * (0.6f + 0.4f * std::sin(t * 2.3f));

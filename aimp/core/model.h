@@ -28,6 +28,9 @@ struct TrackInfo {
   std::wstring title, artist, album, path;
   double duration = 0;  // seconds
   bool favorite = false;
+  // The file itself, for the line under the artist: "FLAC | 44.1 kHz | 16 bit | 867 kbps"; 0 / empty = unknown.
+  std::wstring format;
+  int sampleRate = 0, bits = 0, bitrate = 0;  // Hz, bits per sample, kbps
 };
 
 struct ListRow {
@@ -44,7 +47,7 @@ struct Wave {
 };
 
 struct SpectrumBars {
-  static constexpr int kCount = 18;
+  static constexpr int kCount = 48;
   float level[kCount] = {};  // 0..1, smoothed
 };
 
@@ -69,6 +72,7 @@ struct Model {
   int navCount[4] = {};
   std::wstring listTitle;     // "ПЛЕЙЛИСТ", a playlist name, a folder name...
   std::vector<std::wstring> playlists;  // AIMP's loaded playlists (Playlists view)
+  std::vector<std::wstring> playlistIds;  // their AIMP ids, same order: a choice names the playlist, not a position
   int playlistShown = -1;               // the one listed below
   int playlistPlaying = -1;             // the one playing
   std::vector<ListRow> rows;  // the current list, unfiltered
@@ -86,5 +90,9 @@ struct Model {
   Theme theme = Theme::Dark;
   float time = 0;  // seconds since start, drives the background animation
 };
+
+// Dark text on a light background: the light theme, unless the black-and-silver filter is past its middle
+// (the background is black there, so the interface takes the dark look).
+inline bool LightLook(const Model& m) { return m.theme == Theme::Light && m.settings.mono < 50; }
 
 }  // namespace glass

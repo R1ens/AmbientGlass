@@ -1,4 +1,5 @@
 // Window layout at many sizes: everything inside the window, panels apart, nothing overlapping its neighbours.
+#include <array>
 #include <string>
 #include <vector>
 
@@ -46,9 +47,24 @@ TEST(layout_card_contents_fit_and_do_not_collide) {
     CHECK_NEAR(L.cover.W(), L.cover.H(), 0.01);
     CHECK(L.cover.W() >= 96);
     CHECK(Inside(L.cover, L.card));
-    CHECK(Inside(L.spectrum, L.card));
-    CHECK(L.spectrum.t >= L.cover.b);
+    // The cover sits in the middle of the card's height.
+    if (L.cover.H() < L.card.H() - 44) CHECK_NEAR(L.cover.Cy(), L.card.Cy(), 1.0);
     CHECK(Inside(L.info, L.card));
+    // The format line and the spectrum sit between the artist and the waveform times, right of the cover.
+    CHECK(L.format.Valid());
+    if (L.formatInTimes) {  // between "1:24" and "3:47"
+      CHECK(L.format.Cy() > L.waveTimes.t && L.format.Cy() < L.waveTimes.b);
+      CHECK(L.format.l >= L.waveTimes.l + 48 && L.format.r <= L.waveTimes.r - 48);
+    } else {
+      CHECK(L.format.t >= L.artist.b);
+      CHECK(L.format.b <= L.waveTimes.t);
+    }
+    if (L.spectrum.Valid()) {
+      CHECK(Inside(L.spectrum, L.info));
+      CHECK(L.spectrum.t >= (L.formatInTimes ? L.artist.b : L.format.b));
+      CHECK(L.spectrum.b <= L.waveTimes.t);
+      CHECK(L.spectrum.H() >= 28);
+    }
     CHECK(L.info.l >= L.cover.r);
     // Top to bottom: badge, title, artist, times, waveform, controls.
     if (L.badge.Valid()) CHECK(L.badge.b <= L.title.t);
@@ -60,6 +76,14 @@ TEST(layout_card_contents_fit_and_do_not_collide) {
     for (const Rc* c : ctl) CHECK(Inside(*c, L.info));
     for (int i = 0; i < 7; i++)
       for (int j = i + 1; j < 7; j++) CHECK(Apart(*ctl[i], *ctl[j]));
+  }
+}
+
+TEST(layout_spectrum_has_room_in_ordinary_windows) {
+  for (auto& s : {std::array<float, 2>{1100, 700}, std::array<float, 2>{1280, 800}, std::array<float, 2>{1600, 1000}}) {
+    Layout L = ComputeLayout(s[0], s[1]);
+    CHECK(L.spectrum.Valid());
+    CHECK(L.spectrum.W() >= 300);
   }
 }
 
@@ -118,6 +142,29 @@ TEST(layout_list_title_is_left_of_search_and_clickable_with_a_choice) {
   CHECK(HitTest(L, m, st, x, y).hit == Hit::ListTitle);
   m.nav = Nav::Favorites;
   CHECK(HitTest(L, m, st, x, y).hit != Hit::ListTitle);  // only in the Playlists view
+  // Once drawn, only the button itself (title and chevron) opens the chooser, not the summary after it.
+  m.nav = Nav::Playlists;
+  st.listTitleR = L.listTitle.l + 60;
+  CHECK(HitTest(L, m, st, L.listTitle.l + 50, y).hit == Hit::ListTitle);
+  CHECK(HitTest(L, m, st, L.listTitle.l + 70, y).hit != Hit::ListTitle);
+}
+
+TEST(menu_text_shows_ampersands_and_tabs_as_is) {
+  CHECK(MenuText(L"Rock & Roll") == L"Rock && Roll");
+  CHECK(MenuText(L"a\tb") == L"a b");
+  CHECK(MenuText(L"") == L"");
+}
+
+TEST(light_look_gives_way_to_black_and_silver) {
+  Model m;
+  m.theme = Theme::Light;
+  CHECK(LightLook(m));
+  m.settings.mono = 49;
+  CHECK(LightLook(m));
+  m.settings.mono = 50;  // the background is black from here: light text
+  CHECK(!LightLook(m));
+  m.theme = Theme::Dark, m.settings.mono = 0;
+  CHECK(!LightLook(m));
 }
 
 TEST(layout_quick_settings_rows_fit_above_the_buttons) {

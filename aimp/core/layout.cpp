@@ -10,7 +10,7 @@ constexpr float kSidebar = 240, kSidebarCompact = 64;
 constexpr float kBottom = 72;
 constexpr float kCardPad = 22, kCardGap = 18;
 constexpr float kListMin = 220, kListShare = 0.34f;
-constexpr float kCoverMax = 420, kSpectrumH = 42;
+constexpr float kCoverMax = 420, kSpectrumMaxH = 120, kSpectrumMinH = 28;
 
 Rc R(float l, float t, float r, float b) { return Rc{l, t, r, b}; }
 Rc Box(float x, float y, float w, float h) { return Rc{x, y, x + w, y + h}; }
@@ -66,22 +66,20 @@ Layout ComputeLayout(float width, float height) {
   L.card = R(cx0, top, cx1, bottom - listH - kGap);
   L.list = R(cx0, L.card.b + kGap, cx1, bottom);
 
-  // Card: square cover on the left (with the spectrum under it), track info and controls on the right.
+  // Card: square cover on the left, centred in the card's height; track info, spectrum and controls on the right.
   {
     const Rc& c = L.card;
     const float innerH = c.H() - 2 * kCardPad;
     // The info column needs ~360 px for the transport buttons plus like and more.
     float wrapW = std::min({c.W() * 0.52f, kCoverMax, c.W() - 2 * kCardPad - kCardGap - 360});
-    float side = std::min(wrapW * 0.88f, innerH - kSpectrumH - 10);
+    float side = std::min(wrapW * 0.88f, innerH);
     side = std::max(side, 96.f);
     wrapW = std::min(wrapW, side / 0.88f);
     const float wrapL = c.l + kCardPad;
     const float coverL = wrapL + (wrapW - side) / 2;
-    const float blockH = side + 10 + kSpectrumH;
-    const float coverT = c.t + kCardPad + std::max(0.f, (innerH - blockH) / 2);
+    const float coverT = c.t + kCardPad + std::max(0.f, (innerH - side) / 2);
     L.cover = Box(coverL, coverT, side, side);
     L.coverGlow = Box(L.cover.Cx() - side * 0.49f, L.cover.Cy() - side * 0.49f, side * 0.98f, side * 0.98f);
-    L.spectrum = Box(coverL, L.cover.b + 10, side, kSpectrumH);
 
     L.info = R(wrapL + wrapW + kCardGap, c.t + kCardPad + 8, c.r - kCardPad, c.b - kCardPad - 8);
     const Rc& in = L.info;
@@ -113,6 +111,16 @@ Layout ComputeLayout(float width, float height) {
     L.btnLike = Box(L.btnMore.l - 8 - 38, ctlY + 8, 38, 38);
     L.wave = R(in.l, ctlY - 16 - 54, in.r, ctlY - 16);
     L.waveTimes = R(in.l, L.wave.t - 6 - 14, in.r, L.wave.t - 6);
+    // The file's format under the artist; a short card moves it between the two times above the waveform,
+    // leaving the height to the spectrum.
+    L.format = R(in.l, L.artist.b + 6, in.r, L.artist.b + 6 + 18);
+    L.formatInTimes = L.waveTimes.t - 6 - (L.format.b + 10) < 60;
+    if (L.formatInTimes) L.format = R(in.l + 56, L.waveTimes.t - 2, in.r - 56, L.waveTimes.b + 2);
+    // The spectrum fills the free space between the text and the waveform, centred in it.
+    const float freeT = (L.formatInTimes ? L.artist.b : L.format.b) + 10, freeB = L.waveTimes.t - 6;
+    const float sh = std::min(kSpectrumMaxH, freeB - freeT);
+    L.spectrum = sh >= kSpectrumMinH ? R(in.l, freeT + (freeB - freeT - sh) / 2, in.r, freeT + (freeB - freeT - sh) / 2 + sh)
+                                     : Rc{};
   }
 
   // Playlist panel: title and search on top, column headings, then the rows.

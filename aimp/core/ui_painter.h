@@ -26,6 +26,8 @@ class UiPainter {
   void PaintQuick(ID3D11Texture2D* target, float scale, const Model& m, const Layout& L, const UiState& s);
   // Drop the cached target bitmap (call before resizing the swap chain).
   void ReleaseTarget();
+  // Right edge of the playlist chooser button in the last Paint (layout units), 0 when there is none.
+  float ListTitleRight() const { return m_listTitleR; }
 
  private:
   bool Begin(ID3D11Texture2D* target, float scale, const Model& m);
@@ -55,6 +57,7 @@ class UiPainter {
   void Sidebar(const Model& m, const Layout& L, const UiState& s);
   void Card(const Model& m, const Layout& L, const UiState& s);
   void WaveBar(const Model& m, const Layout& L, const UiState& s);
+  void Spectrum(const Model& m, const Rc& sp);
   void List(const Model& m, const Layout& L, const UiState& s);
   void Bottom(const Model& m, const Layout& L, const UiState& s);
   void Quick(const Model& m, const Layout& L, const UiState& s);
@@ -72,6 +75,7 @@ class UiPainter {
   uint64_t m_coverId = ~0ull;
   D2D1_COLOR_F m_a0{}, m_a1{}, m_a2{}, m_text{}, m_dim{};
   bool m_light = false;
+  float m_listTitleR = 0;  // right edge of the playlist chooser button as last drawn, 0 = none
   float m_time = 0;
 };
 

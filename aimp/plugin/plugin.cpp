@@ -596,6 +596,7 @@ void Controller::OnMessage(DWORD msg, INT32 p1, void*) {
       break;
     case AIMP_MSG_EVENT_STREAM_START:
     case AIMP_MSG_EVENT_STREAM_START_SUBTRACK:
+      m_window.Audio().NewTrack();
       RefreshTrack();
       RefreshList();
       break;
@@ -679,10 +680,19 @@ void Controller::RefreshTrack() {
   const bool newTrack = !glass::SamePath(t.path, m_track.path);
   m_track = t;
   bool fav = m_lib.IsFavorite(t.path);
-  m_window.Post([t, fav, newTrack](glass::Model& m) {
+  // The file's format for the line under the artist.
+  glass::TrackInfo fmt;
+  fmt.format = glass::FormatName(t.path, PropString(fi.Get(), AIMP_FILEINFO_PROPID_CODEC));
+  INT32 v = 0;
+  if (SUCCEEDED(fi->GetValueAsInt32(AIMP_FILEINFO_PROPID_SAMPLERATE, &v))) fmt.sampleRate = v;
+  if (SUCCEEDED(fi->GetValueAsInt32(AIMP_FILEINFO_PROPID_BITDEPTH, &v))) fmt.bits = v;
+  if (SUCCEEDED(fi->GetValueAsInt32(AIMP_FILEINFO_PROPID_BITRATE, &v))) fmt.bitrate = v;
+  m_window.Post([t, fav, newTrack, fmt](glass::Model& m) {
     m.track.title = t.title, m.track.artist = t.artist, m.track.album = t.album, m.track.path = t.path;
     m.track.duration = t.duration;
     m.track.favorite = fav;
+    m.track.format = fmt.format;
+    m.track.sampleRate = fmt.sampleRate, m.track.bits = fmt.bits, m.track.bitrate = fmt.bitrate;
     if (newTrack) {
       m.wave = glass::Wave{};
       m.position = 0;
@@ -818,7 +828,7 @@ void Controller::ListenTo(IAIMPPlaylist* pl) {
 void Controller::RefreshList() {
   std::vector<glass::ListRow> rows;
   std::wstring title;
-  std::vector<std::wstring> names;
+  std::vector<std::wstring> names, ids;
   int shown = -1, playingIndex = -1;
   switch (m_nav) {
     case glass::Nav::Playlists: {
@@ -841,6 +851,7 @@ void Controller::RefreshList() {
           if (id == shownId) shown = (int)names.size();
           if (!playingId.empty() && id == playingId) playingIndex = (int)names.size();
           names.push_back(name.empty() ? L"Плейлист " + std::to_wstring(i + 1) : name);
+          ids.push_back(id);
         }
       }
       Ref<IAIMPPropertyList> props;
@@ -902,11 +913,13 @@ void Controller::RefreshList() {
     if (n > 0) title = up.substr(0, n);
   }
   const glass::Nav nav = m_nav;
-  m_window.Post([rows = std::move(rows), title, nav, names = std::move(names), shown, playingIndex](glass::Model& m) mutable {
+  m_window.Post([rows = std::move(rows), title, nav, names = std::move(names), ids = std::move(ids), shown,
+                 playingIndex](glass::Model& m) mutable {
     m.rows = std::move(rows);
     m.listTitle = title;
     m.nav = nav;
     m.playlists = std::move(names);
+    m.playlistIds = std::move(ids);
     m.playlistShown = shown;
     m.playlistPlaying = playingIndex;
   });
@@ -1014,9 +1027,15 @@ void Controller::OnAction(const Action& a) {
       RefreshList();
       break;
     case Act::Playlist:
+      // By id: the list may have changed since the menu was shown.
       if (auto mgr = Service<IAIMPServicePlaylistManager>(IID_IAIMPServicePlaylistManager)) {
-        Ref<IAIMPPlaylist> p;
-        if (SUCCEEDED(mgr->GetLoadedPlaylist(a.index, p.Put())) && p) mgr->SetActivePlaylist(p.Get());
+        for (int i = 0, n = mgr->GetLoadedPlaylistCount(); i < n; i++) {
+          Ref<IAIMPPlaylist> p;
+          if (SUCCEEDED(mgr->GetLoadedPlaylist(i, p.Put())) && p && !a.text.empty() && PlaylistId(p.Get()) == a.text) {
+            mgr->SetActivePlaylist(p.Get());
+            break;
+          }
+        }
       }
       m_nav = glass::Nav::Playlists;
       RefreshList();

@@ -136,17 +136,19 @@ void FillCommon(GlassCB& cb, UINT w, UINT h, float scale, const Model& m, const 
   SetRgb(cb.col2, m.palette.accent[2], o.coverGlow ? 1.f : 0.f);
 
   const bool light = m.theme == Theme::Light, amoled = m.theme == Theme::Amoled;
+  const bool lightLook = LightLook(m);  // the glass follows what the background looks like
   const Rgb base = amoled ? Rgb{0, 0, 0} : light ? Rgb{0.86f, 0.86f, 0.89f} : Rgb{10 / 255.f, 10 / 255.f, 14 / 255.f};
-  SetRgb(cb.base, base, light ? 0.30f : 0.08f);
+  SetRgb(cb.base, base, lightLook ? 0.30f : 0.08f);
   cb.panelSt[0] = kPanelRadius * scale;
-  cb.panelSt[1] = light ? 0.35f : 0.14f;
-  cb.panelSt[2] = light ? 0.12f : 0.35f;
+  cb.panelSt[1] = lightLook ? 0.35f : 0.14f;
+  cb.panelSt[2] = lightLook ? 0.12f : 0.35f;
   cb.panelSt[3] = 0.05f;
   cb.info[1] = o.dither;
   cb.info[2] = (float)(o.seed % 997);
   cb.info[3] = 1.6f;
   SetRc(cb.coverRc, L.cover, scale);
   cb.dim[2] = light ? 1.f : 0.f;
+  cb.dim[3] = lightLook ? 1.f : 0.f;
   cb.fx[0] = std::clamp(o.frost, 0.f, 1.f);
   cb.fx[1] = std::clamp(o.mono, 0.f, 1.f);
   cb.fx[2] = std::clamp(m.loud, 0.f, 1.f);

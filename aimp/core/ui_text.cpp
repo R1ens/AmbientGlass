@@ -2,6 +2,8 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cwchar>
+#include <cwctype>
 
 #include "search.h"
 
@@ -44,6 +46,38 @@ void ApplyQuery(Model& m) {
   std::vector<std::wstring> tokens = QueryTokens(m.query);
   for (int i = 0; i < (int)m.rows.size(); i++)
     if (tokens.empty() || MatchesAll(m.rows[i].search, tokens)) m.visible.push_back(i);
+}
+
+std::wstring FormatName(const std::wstring& path, const std::wstring& codec) {
+  const size_t slash = path.find_last_of(L"\\/"), dot = path.find_last_of(L'.');
+  std::wstring ext;
+  if (dot != std::wstring::npos && (slash == std::wstring::npos || dot > slash) && path.size() - dot - 1 <= 5)
+    for (wchar_t c : path.substr(dot + 1)) ext += (wchar_t)towupper(c);
+  const bool container = ext == L"M4A" || ext == L"MP4" || ext == L"MKA" || ext == L"WEBM";
+  if ((ext.empty() || container) && !codec.empty()) return codec;
+  return ext;
+}
+
+std::wstring FormatLine(const TrackInfo& t) {
+  std::wstring out;
+  auto add = [&](const std::wstring& part) {
+    if (part.empty()) return;
+    if (!out.empty()) out += L" | ";
+    out += part;
+  };
+  add(t.format);
+  if (t.sampleRate > 0) {
+    // 44100 -> 44.1, 48000 -> 48, 22050 -> 22.05
+    wchar_t buf[32];
+    swprintf(buf, 32, L"%.2f", t.sampleRate / 1000.0);
+    std::wstring k = buf;
+    while (!k.empty() && k.back() == L'0') k.pop_back();
+    if (!k.empty() && k.back() == L'.') k.pop_back();
+    add(k + L" kHz");
+  }
+  if (t.bits > 0) add(std::to_wstring(t.bits) + L" bit");
+  if (t.bitrate > 0) add(std::to_wstring(t.bitrate) + L" kbps");
+  return out;
 }
 
 }  // namespace glass
