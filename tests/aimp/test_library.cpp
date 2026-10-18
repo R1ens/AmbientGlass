@@ -93,12 +93,21 @@ TEST(library_audio_scan) {
   Touch(d + L"\\sub\\c.m4a");
   Touch(d + L"\\sub\\notes.txt");
   CHECK_EQ(CountAudioFiles(d), 3);
+  // Files of a folder first, in natural order, then its subfolders.
+  Touch(d + L"\\10 - ten.mp3");
+  Touch(d + L"\\2 - two.mp3");
+  std::vector<std::wstring> list = ListAudioFiles(d);
+  CHECK_EQ(list.size(), (size_t)5);
+  CHECK(list[0] == d + L"\\2 - two.mp3");
+  CHECK(list[1] == d + L"\\10 - ten.mp3");
+  CHECK(list[4] == d + L"\\sub\\c.m4a");
   CHECK(IsAudioFile(L"x.Opus"));
   CHECK(!IsAudioFile(L"x.mp3.txt"));
   CHECK(!IsAudioFile(L"noext"));
   CHECK(FolderName(L"D:\\Music\\Rock\\") == L"Rock");
   CHECK(FolderName(L"D:\\") == L"D:\\");
-  for (const wchar_t* f : {L"\\a.mp3", L"\\b.FLAC", L"\\cover.jpg", L"\\sub\\c.m4a", L"\\sub\\notes.txt"})
+  for (const wchar_t* f : {L"\\a.mp3", L"\\b.FLAC", L"\\cover.jpg", L"\\sub\\c.m4a", L"\\sub\\notes.txt",
+                           L"\\10 - ten.mp3", L"\\2 - two.mp3"})
     DeleteFileW((d + f).c_str());
   RemoveDirectoryW((d + L"\\sub").c_str());
   RemoveDirectoryW(d.c_str());

@@ -554,7 +554,9 @@ void UiPainter::List(const Model& m, const Layout& L, const UiState& s) {
     if (r.artist.empty()) name = Rc{num.r + gap, rr.t, nameR, rr.b};
     Text(r.title, name, 12.5f, m_text, DWRITE_FONT_WEIGHT_MEDIUM);
     Text(r.artist, art, 11, m_dim);
-    if (wide) Text(r.album, Rc{nameR + gap, rr.t, nameR + gap + albW, rr.b}, 12, m_dim);
+    // The playing row's level bars sit just left of the duration: keep the album clear of them.
+    const float eqRoom = r.playing && m.state == PlayState::Playing ? 18.f : 0.f;
+    if (wide) Text(r.album, Rc{nameR + gap, rr.t, nameR + gap + albW - eqRoom, rr.b}, 12, m_dim);
     Rc dur = Rc{rr.r - 8 - durW, rr.t, rr.r - 8, rr.b};
     if (r.duration > 0) Text(FormatTime(r.duration), dur, 11, m_dim, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING);
     if (r.playing && m.state == PlayState::Playing) {

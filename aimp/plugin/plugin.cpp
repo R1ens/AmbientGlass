@@ -858,15 +858,29 @@ void Controller::OpenFolder(const std::wstring& path) {
   // One AIMP playlist per folder, reused: "Glass: <folder>".
   std::wstring name = L"Glass: " + glass::FolderName(path);
   Ref<IAIMPPlaylist> pl;
-  if (FAILED(mgr->GetLoadedPlaylistByName(MakeString(name).Get(), pl.Put())) || !pl)
-    mgr->CreatePlaylist(MakeString(name).Get(), TRUE, pl.Put());
+  HRESULT hr = mgr->GetLoadedPlaylistByName(MakeString(name).Get(), pl.Put());
+  Log::Info("folder: open %s, existing playlist hr=0x%08lx", ToUtf8(path).c_str(), (unsigned long)hr);
+  if (FAILED(hr) || !pl) {
+    hr = mgr->CreatePlaylist(MakeString(name).Get(), TRUE, pl.Put());
+    Log::Info("folder: create playlist hr=0x%08lx", (unsigned long)hr);
+  }
   if (!pl) return;
   pl->BeginUpdate();
   pl->DeleteAll();
-  pl->Add(MakeString(path).Get(), AIMP_PLAYLIST_ADD_FLAGS_NOTHREADING | AIMP_PLAYLIST_ADD_FLAGS_FILEINFO, -1);
+  // AIMP expands a folder path itself; if it adds nothing, hand it the audio files one by one, in track order.
+  hr = pl->Add(MakeString(path).Get(), AIMP_PLAYLIST_ADD_FLAGS_NOTHREADING, -1);
+  if (pl->GetItemCount() == 0) {
+    Ref<IAIMPObjectList> list;
+    if (SUCCEEDED(Core()->CreateObject(IID_IAIMPObjectList, list.PutVoid())) && list) {
+      for (const std::wstring& f : glass::ListAudioFiles(path)) list->Add(MakeString(f).Get());
+      hr = pl->AddList(list.Get(), AIMP_PLAYLIST_ADD_FLAGS_NOTHREADING, -1);
+    }
+  }
   pl->EndUpdate();
-  mgr->SetActivePlaylist(pl.Get());
-  player->Play3(pl.Get());
+  Log::Info("folder: add hr=0x%08lx, %d items", (unsigned long)hr, pl->GetItemCount());
+  hr = mgr->SetActivePlaylist(pl.Get());
+  HRESULT hp = player->Play3(pl.Get());
+  Log::Info("folder: activate hr=0x%08lx, play hr=0x%08lx", (unsigned long)hr, (unsigned long)hp);
   m_nav = glass::Nav::Playlists;
   RefreshList();
   RefreshCounts();
@@ -916,6 +930,7 @@ void Controller::OnAction(const Action& a) {
         Ref<IAIMPPlaylistItem> item;
         if (pl && SUCCEEDED(pl->GetItem(a.index, IID_IAIMPPlaylistItem, item.PutVoid())) && item) player->Play2(item.Get());
       } else if (m_nav == glass::Nav::Folders) {
+        Log::Info("folder: row %d of %d", a.index, (int)m_navFolders.size());
         if (a.index >= 0 && a.index < (int)m_navFolders.size()) OpenFolder(m_navFolders[a.index]);
       } else if (a.index >= 0 && a.index < (int)m_navTracks.size()) {
         player->Play4(MakeString(m_navTracks[a.index].path).Get(),

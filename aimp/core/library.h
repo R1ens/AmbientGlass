@@ -44,6 +44,9 @@ bool IsAudioFile(const std::wstring& path);                    // by extension
 // Counts audio files under `root` (recursively, skipping hidden and system folders). Stops early when
 // `cancel` becomes true.
 int CountAudioFiles(const std::wstring& root, const volatile bool* cancel = nullptr);
+// The audio files under `root` (recursively, same rules), sorted folder by folder in natural order
+// ("2 - x" before "10 - y"), so an album plays in track order.
+std::vector<std::wstring> ListAudioFiles(const std::wstring& root, const volatile bool* cancel = nullptr);
 std::wstring FolderName(const std::wstring& path);
 
 }  // namespace glass

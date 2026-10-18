@@ -85,30 +85,51 @@ bool IsAudioFile(const std::wstring& path) {
   return false;
 }
 
+namespace {
+
+// Depth-first walk: the files of a folder (sorted), then its subfolders (sorted), skipping hidden and system
+// entries and junctions.
+template <class OnFile>
+void WalkAudio(const std::wstring& dir, const volatile bool* cancel, OnFile&& onFile) {
+  if (cancel && *cancel) return;
+  std::vector<std::wstring> files, dirs;
+  WIN32_FIND_DATAW fd;
+  HANDLE h = FindFirstFileExW((dir + L"\\*").c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr,
+                              FIND_FIRST_EX_LARGE_FETCH);
+  if (h == INVALID_HANDLE_VALUE) return;
+  do {
+    std::wstring name = fd.cFileName;
+    if (name == L"." || name == L"..") continue;
+    if (fd.dwFileAttributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)) continue;
+    if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+      if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) dirs.push_back(name);
+    } else if (IsAudioFile(name)) {
+      files.push_back(name);
+    }
+  } while (FindNextFileW(h, &fd));
+  FindClose(h);
+  auto natural = [](const std::wstring& a, const std::wstring& b) {
+    return CompareStringEx(LOCALE_NAME_USER_DEFAULT, SORT_DIGITSASNUMBERS | NORM_IGNORECASE, a.c_str(), (int)a.size(),
+                           b.c_str(), (int)b.size(), nullptr, nullptr, 0) == CSTR_LESS_THAN;
+  };
+  std::sort(files.begin(), files.end(), natural);
+  std::sort(dirs.begin(), dirs.end(), natural);
+  for (const std::wstring& f : files) onFile(dir + L"\\" + f);
+  for (const std::wstring& d : dirs) WalkAudio(dir + L"\\" + d, cancel, onFile);
+}
+
+}  // namespace
+
 int CountAudioFiles(const std::wstring& root, const volatile bool* cancel) {
   int n = 0;
-  std::vector<std::wstring> stack{root};
-  while (!stack.empty()) {
-    if (cancel && *cancel) break;
-    std::wstring dir = stack.back();
-    stack.pop_back();
-    WIN32_FIND_DATAW fd;
-    HANDLE h = FindFirstFileExW((dir + L"\\*").c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr,
-                                FIND_FIRST_EX_LARGE_FETCH);
-    if (h == INVALID_HANDLE_VALUE) continue;
-    do {
-      std::wstring name = fd.cFileName;
-      if (name == L"." || name == L"..") continue;
-      if (fd.dwFileAttributes & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM)) continue;
-      if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) stack.push_back(dir + L"\\" + name);
-      } else if (IsAudioFile(name)) {
-        n++;
-      }
-    } while (FindNextFileW(h, &fd));
-    FindClose(h);
-  }
+  WalkAudio(root, cancel, [&](const std::wstring&) { n++; });
   return n;
+}
+
+std::vector<std::wstring> ListAudioFiles(const std::wstring& root, const volatile bool* cancel) {
+  std::vector<std::wstring> out;
+  WalkAudio(root, cancel, [&](const std::wstring& f) { out.push_back(f); });
+  return out;
 }
 
 bool Library::AddFolder(const std::wstring& path) {
