@@ -32,8 +32,10 @@ int RenderDemo(const std::wstring& dir, bool warp) {
       {L"playing", 0, 1600, 1000, 1.f, true},   {L"background_only", 0, 1600, 1000, 1.f, false},
       {L"long_title", 1, 1280, 800, 1.f, true}, {L"liked", 2, 1440, 900, 1.f, true},
       {L"paused", 3, 1280, 800, 1.f, true},     {L"quick_settings", 4, 1600, 1000, 1.f, true},
-      {L"light", 5, 1600, 1000, 1.f, true},     {L"min_size", 0, 880, 600, 1.f, true},
+      {L"light", 5, 1600, 1000, 1.f, true},     {L"light_background", 5, 1600, 1000, 1.f, false},     {L"min_size", 0, 880, 600, 1.f, true},
       {L"hidpi_150", 0, 2400, 1500, 1.5f, true},
+      {L"clear_glass", 7, 1600, 1000, 1.f, true}, {L"mono", 8, 1600, 1000, 1.f, true},
+      {L"mono_clear", 9, 1600, 1000, 1.f, true},
   };
   CreateDirectoryW(dir.c_str(), nullptr);
   for (const Shot& s : shots) {
@@ -70,7 +72,8 @@ int Golden(const std::wstring& dir, bool update) {
     int variant;
     UINT w, h;
   } shots[] = {{L"playing", 0, 1100, 700}, {L"quick_settings", 4, 1100, 700}, {L"light", 5, 1100, 700},
-               {L"min_size", 0, 880, 600}, {L"long_title", 1, 1100, 700}};
+               {L"min_size", 0, 880, 600}, {L"long_title", 1, 1100, 700}, {L"mono_cover", 6, 1100, 700},
+               {L"clear_mono", 9, 1100, 700}};
   constexpr double kMinPsnr = 40;
   int failed = 0;
   for (const Shot& s : shots) {

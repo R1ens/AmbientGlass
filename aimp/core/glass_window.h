@@ -24,10 +24,11 @@ enum class Act {
   PlayPause, Next, Prev, Seek, Volume, Shuffle, Repeat,
   PlayRow,          // index: Model::rows index
   Nav,              // index: Nav
+  Playlist,         // index: AIMP's loaded playlist to show
   Like,
   AddFolder,        // text: chosen folder
   Scan,
-  AimpOption,       // index: QuickItem::Fading, value: 0/1
+  AimpOption,       // index: QuickItem::Fading / PauseBetween / Equalizer, value: 0/1
   AimpSettings,     // open AIMP's own settings
   Classic,          // show AIMP's own window again
   Quit,
@@ -75,6 +76,7 @@ class GlassWindow {
   void Resize();
   void UpdateHover(float x, float y);
   void Click(const HitResult& h, float x, float y);
+  void DragSlider(float x);
   void Key(UINT vk);
   void Char(wchar_t c);
   void Send(Action a);
@@ -103,6 +105,8 @@ class GlassWindow {
   float m_palT = 1;
   double m_posBase = 0, m_posAt = 0;  // last reported position and when it came (seconds of m_clock)
   double m_clock = 0;
+  double m_animClock = 0;  // the background's clock, faster for faster music
+  float m_rate = 1;
   LARGE_INTEGER m_qpcFreq{}, m_qpcLast{};
   bool m_tracking = false;
   float m_scrollTarget = 0;

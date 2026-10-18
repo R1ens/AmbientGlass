@@ -20,7 +20,8 @@ cbuffer GlassCB : register(b0) {
   float4 panelSt;  // x = radius px, y = border alpha, z = shadow alpha, w = highlight alpha
   float4 info;     // x = panel count, y = dither amplitude (in 8-bit steps), z = seed, w = glass saturation
   float4 coverRc;  // cover rect px (l, t, r, b) for the glow
-  float4 dim;      // x = dark veil of the overlay pass, yzw unused
+  float4 dim;      // x = dark veil of the overlay pass, z = 1 for the light theme, yw unused
+  float4 fx;       // x = glass frost 0..1 (0 = clear), y = black-and-silver 0..1, z = relative loudness, w = tempo 0..1
   float4 panels[kMaxPanels];  // l, t, r, b px
 };
 
@@ -62,6 +63,31 @@ float3 LinToSrgb(float3 c) {
 
 float Ign(float2 p) { return frac(52.9829189 * frac(0.06711056 * p.x + 0.00583715 * p.y)); }
 
+float3 RgbToHsv(float3 c) {
+  float4 K = float4(0, -1.0 / 3, 2.0 / 3, -1);
+  float4 p = c.g < c.b ? float4(c.bg, K.wz) : float4(c.gb, K.xy);
+  float4 q = c.r < p.x ? float4(p.xyw, c.r) : float4(c.r, p.yzx);
+  float d = q.x - min(q.w, q.y);
+  return float3(abs(q.z + (q.w - q.y) / (6 * d + 1e-6)), d / (q.x + 1e-6), q.x);
+}
+
+float3 HsvToRgb(float3 c) {
+  float3 p = abs(frac(c.xxx + float3(1, 2.0 / 3, 1.0 / 3)) * 6 - 3);
+  return c.z * lerp(1.0.xxx, saturate(p - 1), c.y);
+}
+
+// One colour, varied: the blob's density waves are shifts of hue and saturation of the same accent.
+// t in 0..1 picks the variation; hueSpan in turns, satLo..satHi scales the saturation.
+float3 Vary(float3 lin, float t, float hueSpan, float satLo, float satHi) {
+  float3 hsv = RgbToHsv(LinToSrgb(lin));
+  hsv.x = frac(hsv.x + (t - 0.5) * hueSpan);
+  hsv.y = saturate(hsv.y * lerp(satLo, satHi, t));
+  return SrgbToLin(HsvToRgb(hsv));
+}
+
+// Black and silver: light kept as a slightly cool grey of the same brightness, over black.
+float3 Silver(float3 c) { return dot(c, float3(0.2126, 0.7152, 0.0722)) * float3(0.94, 0.97, 1.0); }
+
 // ---------------------------------------------------------------------------------------------------------
 // Ribbons: rendered at a reduced size, uv covers the whole output.
 // ---------------------------------------------------------------------------------------------------------
@@ -78,7 +104,7 @@ float4 PSRibbons(VSOut i) : SV_Target {
 
   // The glowing mass behind the cover: an organic rim that breathes with the bass and swells on the beat.
   float n1 = Fbm(cs * 1.4 + float2(t * 0.07, -t * 0.05));
-  float rim = 1.25 + 0.45 * n1 + 0.30 * bass + 0.45 * pulse;
+  float rim = (1.25 + 0.45 * n1 + 0.30 * bass + 0.45 * pulse) * (0.92 + 0.16 * fx.z);
   float mass = exp(-2.2 * pow(max(rn - 0.55, 0) / max(rim - 0.55, 0.05), 2));
 
   // Plasma filaments wrapped around the mass: ridged, domain-warped noise flowing slowly outwards.
@@ -102,14 +128,18 @@ float4 PSRibbons(VSOut i) : SV_Target {
   float ray = pow(Ridge(rv), width);
   ray *= smoothstep(0.75, 1.35, rn) * (1 - smoothstep(0.45, 1.0, along)) * pow(1 - along, 1.5);
 
-  float3 c0 = col0.rgb, c1 = col1.rgb, c2 = col2.rgb;
-  float3 cMass = lerp(c0, c1, saturate(n1 * 1.2 - 0.1));
-  float3 cFil = lerp(c1, c2, saturate(warp.x * 1.4 - 0.2));
-  float3 cRay = lerp(c0, c2, rv);
+  // A single accent colour; the waves of density are variations of its hue and saturation.
+  float3 c0 = col0.rgb;
+  float3 cMass = Vary(c0, saturate(n1 * 1.2 - 0.1), 0.08, 0.80, 1.15);
+  float3 cFil = Vary(c0, saturate(warp.x * 1.4 - 0.2), 0.12, 0.65, 1.20);
+  // Rays are nearly white light, so they stand out from the blob by colour too, not only by shape.
+  float3 cRay = lerp(Vary(c0, rv, 0.06, 0.5, 0.9), 1.0.xxx, 0.65);
 
-  float3 o = cMass * mass * (0.40 + 0.25 * bass + 0.45 * pulse) * col0.w;
-  o += cFil * fil * (0.35 + 0.45 * pulse) * col0.w;
-  o += cRay * ray * (0.22 + 0.45 * pulse) * col1.w;
+  // Faster music shines a little brighter; louder moments let the rays reach a little further.
+  float bright = 0.92 + 0.16 * fx.w;
+  float3 o = cMass * mass * (0.40 + 0.25 * bass + 0.45 * pulse) * col0.w * bright;
+  o += cFil * fil * (0.35 + 0.45 * pulse) * col0.w * bright;
+  o += cRay * ray * (0.22 + 0.45 * pulse) * (0.85 + 0.30 * fx.z) * col1.w * bright;
   return float4(o, 1);
 }
 
@@ -134,11 +164,30 @@ float3 ToneMap(float3 c) {
   return l > 1e-5 ? c * (m / (l * 1.6)) : c;
 }
 
+// The ribbons over the base colour. Dark themes add their light; on the light theme added light would vanish,
+// so there they tint the base towards a deep version of their own colour, more where they are brighter.
+float3 LitTheme(float3 rib, float v) {
+  if (dim.z < 0.5) return ToneMap(base.rgb + rib * v);
+  float l = dot(rib, float3(0.2126, 0.7152, 0.0722));
+  float3 hue = rib / max(l, 1e-4);           // the colour at luminance 1
+  float k = saturate(1 - exp(-l * 9.0)) * v;
+  return lerp(base.rgb, min(hue * 0.15, 1), k * 0.90);
+}
+
+// The theme's look, faded into black and silver by fx.y: a black background with silver light, whatever
+// the theme.
+float3 Lit(float3 rib, float v) {
+  float3 c = LitTheme(rib, v);
+  if (fx.y <= 0) return c;
+  float3 mono = ToneMap(Silver(rib) * v * 1.15);
+  return lerp(c, mono, fx.y);
+}
+
 float3 Background(float2 uv, float2 p) {
   float3 rib = t0.SampleLevel(sLin, uv, 0.7).rgb;
   // Darker towards the bottom and the corners, like light falling off in a room.
   float v = 1 - 0.55 * smoothstep(0.35, 1.0, uv.y) - 0.25 * smoothstep(0.55, 1.1, length(uv - 0.5) * 1.4);
-  return ToneMap(base.rgb + rib * v);
+  return Lit(rib, v);
 }
 
 float3 Saturate(float3 c, float s) {
@@ -148,16 +197,28 @@ float3 Saturate(float3 c, float s) {
 
 // One glass panel at p: the blurred background, dimmed, under a faint white tint, a highlight along the top
 // and a 1 px border. sd = signed distance to the panel's edge.
+float3 Background(float2 uv, float2 p);
+
+// The frost of a panel at signed distance sd: fx.x inside, rising to full frost in a narrow band at the edge,
+// so even clear panels keep a frosted rim that marks where they are.
+float Frost(float sd) {
+  float band = 0.6 * panelSt.x;  // a little over half the corner radius
+  return lerp(fx.x, 1, 1 - smoothstep(0, band, -sd));
+}
+
 float3 Glass(float2 p, float2 uv, float4 r, float sd) {
+  float frost = Frost(sd);
   float3 glassBg = t1.SampleLevel(sLin, uv, 0).rgb;
   float v = 1 - 0.55 * smoothstep(0.35, 1.0, uv.y);
-  float3 g = ToneMap(base.rgb + Saturate(glassBg, info.w) * v * 0.55);
+  float3 frosted = Lit(Saturate(glassBg, info.w) * 0.55, v);
+  float3 clear = Background(uv, p);
+  float3 g = lerp(clear, frosted, frost);
   // Tint, highlight and border mix in sRGB like the CSS they come from: a few percent of white there is a
-  // faint veil, while the same mix in linear light would wash the glass out to grey.
+  // faint veil, while the same mix in linear light would wash the glass out to grey. Clear glass has no tint.
   float3 gs = LinToSrgb(g);
-  gs = lerp(gs, 1.0.xxx, base.w);
+  gs = lerp(gs, 1.0.xxx, base.w * frost);
   float hl = saturate(1 - (p.y - r.y) / (0.4 * (r.w - r.y)));
-  gs += panelSt.w * hl * hl;
+  gs += panelSt.w * hl * hl * frost;
   float ring = saturate(1 - abs(sd + 0.5));
   gs = lerp(gs, 1.0.xxx, panelSt.y * ring);
   return SrgbToLin(saturate(gs));
@@ -196,9 +257,16 @@ float4 PSComposite(VSOut i) : SV_Target {
     float2 rel = (p - cc) / hs;                          // -1..1 over the cover
     float2 cuv = saturate(rel * 0.5 + 0.5);
     float3 cov = SrgbToLin(t2.SampleLevel(sLin, cuv, 6.5).rgb);
+    cov = lerp(cov, Silver(cov), fx.y);
     float dist = max(RoundRectSd(p, coverRc, 24), 0) / hs.x;
     float glow = exp(-dist * dist * 1.8) * (0.8 + 0.4 * audio.z);
-    c += cov * glow * col2.w * 0.32;
+    if (dim.z < 0.5) {
+      c += cov * glow * col2.w * 0.32;
+    } else {
+      // Light theme: the glow tints towards a deep version of the cover's colours instead of adding light.
+      float l = dot(cov, float3(0.2126, 0.7152, 0.0722));
+      c = lerp(c, min(cov / max(l, 1e-4) * 0.15, 1), saturate(glow * col2.w * 0.45));
+    }
   }
 
   return float4(Dither(LinToSrgb(c), p), 1);

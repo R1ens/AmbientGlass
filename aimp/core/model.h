@@ -61,18 +61,25 @@ struct Model {
   Wave wave;
   SpectrumBars spectrum;
   float bass = 0, high = 0, pulse = 0;  // from the beat detector
+  float bpm = 0;    // tempo, 0 while unknown
+  float loud = 0;   // loudness relative to the recent loudest, 0..1
 
   // Lists
   Nav nav = Nav::Playlists;
   int navCount[4] = {};
   std::wstring listTitle;     // "ПЛЕЙЛИСТ", a playlist name, a folder name...
+  std::vector<std::wstring> playlists;  // AIMP's loaded playlists (Playlists view)
+  int playlistShown = -1;               // the one listed below
+  int playlistPlaying = -1;             // the one playing
   std::vector<ListRow> rows;  // the current list, unfiltered
   std::wstring query;         // search box text
   std::vector<int> visible;   // indices into rows that match the query, in order
 
   // Settings: the shell's own, and AIMP's playback switches shown in quick settings
   GlassSettings settings;
-  bool aimpFading = false;
+  bool aimpFading = false;   // crossfade when a track ends and the next one starts
+  bool aimpPause = false;    // a short pause between tracks
+  bool aimpEq = false;       // AIMP's equalizer
 
   // Window
   bool quickSettingsOpen = false;

@@ -300,7 +300,15 @@ void GlassWindow::Frame() {
 
   // Animated values for this frame.
   Model m = m_model;
-  m.time = (float)m_clock;
+  // The background's own clock runs faster for faster music (smoothly, so a tempo change never jolts it).
+  {
+    AudioFrame af = m_audio.Snapshot();
+    float target = af.bpm > 0 ? std::clamp(af.bpm / 120.f, 0.65f, 1.5f) : 1.f;
+    m_rate += (target - m_rate) * (1 - std::exp(-dt / 1.5f));
+    if (m_model.state == PlayState::Playing) m_animClock += dt * m_rate;
+    else m_animClock += dt * 0.6;  // paused: slow breathing
+  }
+  m.time = (float)m_animClock;
   if (m.state == PlayState::Playing && m.track.duration > 0)
     m.position = std::min(m.track.duration, m_posBase + (m_clock - m_posAt));
   m_palT = std::min(1.f, m_palT + dt / 0.6f);
@@ -309,6 +317,8 @@ void GlassWindow::Frame() {
   const float beat = m.settings.beat / 100.f;
   for (int i = 0; i < SpectrumBars::kCount; i++) m.spectrum.level[i] = a.bars[i];
   m.bass = std::min(1.f, a.bass * beat), m.high = std::min(1.f, a.high * beat), m.pulse = std::min(1.f, a.pulse * beat);
+  m.bpm = a.bpm;
+  m.loud = a.loud;
   m.theme = (Theme)m.settings.theme;
   m_ui.likeFlash = std::max(0.f, m_ui.likeFlash - dt / 0.45f);
   m_ui.listScroll += (m_scrollTarget - m_ui.listScroll) * (1 - std::exp(-dt / 0.06f));
@@ -323,6 +333,8 @@ void GlassWindow::Frame() {
   o.background = m.settings.background;
   o.coverGlow = m.settings.coverGlow;
   o.ribbons = o.rays = m.settings.ribbons / 100.f;
+  o.frost = m.settings.frost / 100.f;
+  o.mono = m.settings.mono / 100.f;
   o.seed = (uint32_t)(m_clock * 60);
   m_gpu->scene.Render(m_gpu->rtv.Get(), m_gpu->w, m_gpu->h, s, m, m_layout, o);
   m_gpu->painter.Paint(m_gpu->back.Get(), s, m, m_layout, m_ui);
@@ -356,6 +368,7 @@ void GlassWindow::UpdateHover(float x, float y) {
     m_tracking = true;
   }
   if (m_ui.draggingWave) m_ui.dragValue = Fraction(m_layout.wave, x);
+  if (m_ui.draggingSlider) DragSlider(x);
   if (m_ui.draggingVolume) {
     m_ui.dragValue = Fraction(m_layout.volume, x);
     Send(Action{Act::Volume, m_ui.dragValue});
@@ -451,13 +464,8 @@ LRESULT GlassWindow::Handle(UINT msg, WPARAM wp, LPARAM lp) {
         m_ui.draggingVolume = true;
         UpdateHover(x, y);
       } else if (m_ui.pressed.hit == Hit::QuickSlider) {
-        QuickRow rows[(int)QuickItem::Count];
-        int n = QuickRows(m_layout, rows, (int)QuickItem::Count);
-        for (int i = 0; i < n; i++)
-          if ((int)rows[i].item == m_ui.pressed.index) {
-            int v = (int)std::lround(Fraction(rows[i].control, x) * 200);
-            (rows[i].item == QuickItem::Ribbons ? m_model.settings.ribbons : m_model.settings.beat) = v;
-          }
+        m_ui.draggingSlider = true;
+        DragSlider(x);
       }
       if (m_ui.pressed.hit != Hit::Search && m_ui.searchFocus) m_ui.searchFocus = false;
       return 0;
@@ -475,6 +483,8 @@ LRESULT GlassWindow::Handle(UINT msg, WPARAM wp, LPARAM lp) {
       } else if (m_ui.draggingVolume) {
         m_ui.draggingVolume = false;
       } else if (m_ui.pressed.hit == Hit::QuickSlider) {
+        m_ui.draggingSlider = false;
+        DragSlider(x);
         SettingsChanged();
       } else if (up.hit == m_ui.pressed.hit && up.index == m_ui.pressed.index) {
         Click(up, x, y);
@@ -516,6 +526,16 @@ LRESULT GlassWindow::Handle(UINT msg, WPARAM wp, LPARAM lp) {
   return DefWindowProcW(m_hwnd, msg, wp, lp);
 }
 
+// A quick settings slider follows the mouse while pressed (pressed.index is its QuickItem).
+void GlassWindow::DragSlider(float x) {
+  QuickRow rows[(int)QuickItem::Count];
+  int n = QuickRows(m_layout, rows, (int)QuickItem::Count);
+  for (int i = 0; i < n; i++)
+    if ((int)rows[i].item == m_ui.pressed.index)
+      if (int* v = QuickSliderValue(m_model.settings, rows[i].item))
+        *v = (int)std::lround(Fraction(rows[i].control, x) * QuickSliderMax(rows[i].item));
+}
+
 void GlassWindow::Click(const HitResult& h, float x, float) {
   Model& m = m_model;
   switch (h.hit) {
@@ -539,6 +559,25 @@ void GlassWindow::Click(const HitResult& h, float x, float) {
       break;
     }
     case Hit::Scan: Send(Action{Act::Scan}); break;
+    case Hit::ListTitle: {
+      // AIMP's playlists in a menu under the title: the shown one checked, the playing one marked.
+      HMENU menu = CreatePopupMenu();
+      for (int i = 0; i < (int)m.playlists.size(); i++) {
+        std::wstring item = m.playlists[i];
+        if (i == m.playlistPlaying) item += L"\t\u25B6";
+        AppendMenuW(menu, MF_STRING | (i == m.playlistShown ? MF_CHECKED : 0), (UINT_PTR)i + 1, item.c_str());
+      }
+      POINT pt{(LONG)(m_layout.listTitle.l * Scale()), (LONG)(m_layout.listTitle.b * Scale() + 2)};
+      ClientToScreen(m_hwnd, &pt);
+      int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, pt.x, pt.y, 0, m_hwnd, nullptr);
+      DestroyMenu(menu);
+      if (cmd > 0 && cmd - 1 != m.playlistShown) {
+        m.query.clear();
+        m_scrollTarget = m_ui.listScroll = 0;
+        Send(Action{Act::Playlist, 0, cmd - 1});
+      }
+      break;
+    }
     case Hit::NavSettings: case Hit::Settings: m.quickSettingsOpen = !m.quickSettingsOpen; break;
     case Hit::Shuffle: m.shuffle = !m.shuffle; Send(Action{Act::Shuffle, m.shuffle ? 1.0 : 0.0}); break;
     case Hit::Repeat: {
@@ -600,6 +639,8 @@ void GlassWindow::Click(const HitResult& h, float x, float) {
       auto flip = [&](bool& v) { v = !v; };
       switch (it) {
         case QuickItem::Fading: flip(m.aimpFading); Send(Action{Act::AimpOption, m.aimpFading ? 1.0 : 0.0, h.index}); break;
+        case QuickItem::PauseBetween: flip(m.aimpPause); Send(Action{Act::AimpOption, m.aimpPause ? 1.0 : 0.0, h.index}); break;
+        case QuickItem::Equalizer: flip(m.aimpEq); Send(Action{Act::AimpOption, m.aimpEq ? 1.0 : 0.0, h.index}); break;
         case QuickItem::Background: m.settings.background = !m.settings.background; SettingsChanged(); break;
         case QuickItem::CoverGlow: m.settings.coverGlow = !m.settings.coverGlow; SettingsChanged(); break;
         case QuickItem::Spectrum: m.settings.spectrum = !m.settings.spectrum; SettingsChanged(); break;

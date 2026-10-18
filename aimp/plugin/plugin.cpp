@@ -297,7 +297,7 @@ class Controller : public glass::Commands {
 
   // Main thread
   void OnMessage(DWORD msg, INT32 p1, void* p2);
-  void OnSpectrum(const float* s, float dtMs) { m_window.Audio().Feed(s, dtMs); }
+  void OnSpectrum(const float* s, float dtMs);
   void OnPlaylistsChanged() { RefreshList(); RefreshCounts(); }
   void OnListChanged(DWORD flags) {
     if (flags & (AIMP_PLAYLIST_NOTIFY_CONTENT | AIMP_PLAYLIST_NOTIFY_FILEINFO | AIMP_PLAYLIST_NOTIFY_PLAYBACKCURSOR))
@@ -333,7 +333,7 @@ class Controller : public glass::Commands {
   Ref<IAIMPPlaylist> CurrentPlaylist();
   void ListenTo(IAIMPPlaylist* pl);
   void AddMenu();
-  bool ReadFading();
+  void PostOptions();
 
   glass::GlassWindow m_window;
   glass::GlassSettings m_settings;
@@ -380,6 +380,32 @@ void WINAPI Visual::Draw(PAIMPVisualData d) {
   float mix[AIMP_VISUAL_SPECTRUM_MAX];
   for (int i = 0; i < AIMP_VISUAL_SPECTRUM_MAX; i++) mix[i] = 0.5f * (d->Spectrum[0][i] + d->Spectrum[1][i]);
   m_c->OnSpectrum(mix, dt);
+}
+
+// With AIMPGLASS_AUDIO_LOG=1 in the environment, every 10 s of playback logs how many beats were found and the
+// average levels: the numbers behind tuning the background on real music.
+void Controller::OnSpectrum(const float* s, float dtMs) {
+  m_window.Audio().Feed(s, dtMs);
+  static const bool enabled = [] {
+    wchar_t v[8] = {};
+    return GetEnvironmentVariableW(L"AIMPGLASS_AUDIO_LOG", v, 8) > 0 && v[0] == L'1';
+  }();
+  if (!enabled) return;
+  static float elapsed = 0, sumBass = 0, sumHigh = 0, sumPulse = 0, maxPulse = 0;
+  static int frames = 0;
+  static unsigned beats0 = 0;
+  glass::AudioFrame f = m_window.Audio().Snapshot();
+  elapsed += dtMs, frames++;
+  sumBass += f.bass, sumHigh += f.high, sumPulse += f.pulse, maxPulse = std::max(maxPulse, f.pulse);
+  float silent = 0;
+  for (int i = 0; i < 8; i++) silent += s[i];
+  if (elapsed >= 10000) {
+    if (silent > 0 || f.beats != beats0)
+      Log::Info("audio: %u beats in %.1f s, bass %.2f, high %.2f, pulse mean %.2f max %.2f, %d frames",
+                f.beats - beats0, elapsed / 1000, sumBass / frames, sumHigh / frames, sumPulse / frames, maxPulse,
+                frames);
+    elapsed = sumBass = sumHigh = sumPulse = maxPulse = 0, frames = 0, beats0 = f.beats;
+  }
 }
 
 void WINAPI PlaylistEvents::PlaylistActivated(IAIMPPlaylist*) { m_c->OnPlaylistsChanged(); }
@@ -476,7 +502,7 @@ bool Controller::Start() {
   m_listEvents = new ListEvents(this);
   m_listEvents->AddRef();
   AddMenu();
-  m_window.Post([fading = ReadFading()](glass::Model& m) { m.aimpFading = fading; });
+  PostOptions();
   Log::Info("plugin: started");
   return true;
 }
@@ -535,10 +561,23 @@ void Controller::AddMenu() {
   }
 }
 
-bool Controller::ReadFading() {
-  auto cfg = Service<IAIMPServiceConfig>(IID_IAIMPServiceConfig);
-  INT32 v = 0;
-  return cfg && SUCCEEDED(cfg->GetValueAsInt32(MakeString(L"AIMPSoundOut\\FadingEnabled").Get(), &v)) && v != 0;
+// AIMP's playback switches shown in quick settings, read through the player's documented properties.
+void Controller::PostOptions() {
+  bool fading = false, pause = false;
+  BOOL eq = FALSE;
+  if (auto pl = Service<IAIMPServicePlayer>(IID_IAIMPServicePlayer)) {
+    Ref<IAIMPPropertyList> props;
+    if (SUCCEEDED(pl->QueryInterface(IID_IAIMPPropertyList, props.PutVoid())) && props) {
+      INT32 v = 0;
+      if (SUCCEEDED(props->GetValueAsInt32(AIMP_PLAYER_PROPID_AUTOSWITCHING, &v))) fading = v != 0;
+      if (SUCCEEDED(props->GetValueAsInt32(AIMP_PLAYER_PROPID_AUTOSWITCHING_PAUSE_BETWEEN_TRACKS, &v))) pause = v > 0;
+    }
+  }
+  if (auto d = Service<IAIMPServiceMessageDispatcher>(IID_IAIMPServiceMessageDispatcher))
+    d->Send(AIMP_MSG_PROPERTY_EQUALIZER, AIMP_MSG_PROPVALUE_GET, &eq);
+  m_window.Post([fading, pause, eq](glass::Model& m) {
+    m.aimpFading = fading, m.aimpPause = pause, m.aimpEq = eq != FALSE;
+  });
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -575,9 +614,10 @@ void Controller::OnMessage(DWORD msg, INT32 p1, void*) {
     }
     case AIMP_MSG_EVENT_PROPERTY_VALUE:
       if (p1 == AIMP_MSG_PROPERTY_VOLUME || p1 == AIMP_MSG_PROPERTY_SHUFFLE || p1 == AIMP_MSG_PROPERTY_REPEAT) RefreshState();
+      if (p1 == AIMP_MSG_PROPERTY_EQUALIZER) PostOptions();
       break;
     case AIMP_MSG_EVENT_OPTIONS:
-      m_window.Post([fading = ReadFading()](glass::Model& m) { m.aimpFading = fading; });
+      PostOptions();
       break;
     case AIMP_MSG_EVENT_TERMINATING:
       m_window.Hide();
@@ -750,10 +790,16 @@ void Controller::StartWave(const std::wstring& path) {
 
 // ---------------------------------------------------------------------------------------------------------
 
+std::wstring PlaylistId(IAIMPPlaylist* pl) {
+  Ref<IAIMPPropertyList> pp;
+  if (!pl || FAILED(pl->QueryInterface(IID_IAIMPPropertyList, pp.PutVoid())) || !pp) return {};
+  return PropString(pp.Get(), AIMP_PLAYLIST_PROPID_ID);
+}
+
 Ref<IAIMPPlaylist> Controller::CurrentPlaylist() {
   Ref<IAIMPPlaylist> pl;
   if (auto mgr = Service<IAIMPServicePlaylistManager>(IID_IAIMPServicePlaylistManager)) {
-    if (FAILED(mgr->GetPlayingPlaylist(pl.Put())) || !pl) mgr->GetActivePlaylist(pl.Put());
+    if (FAILED(mgr->GetActivePlaylist(pl.Put())) || !pl) mgr->GetPlayingPlaylist(pl.Put());
   }
   return pl;
 }
@@ -772,17 +818,40 @@ void Controller::ListenTo(IAIMPPlaylist* pl) {
 void Controller::RefreshList() {
   std::vector<glass::ListRow> rows;
   std::wstring title;
+  std::vector<std::wstring> names;
+  int shown = -1, playingIndex = -1;
   switch (m_nav) {
     case glass::Nav::Playlists: {
       Ref<IAIMPPlaylist> pl = CurrentPlaylist();
       ListenTo(pl.Get());
       if (!pl) break;
+      // The chooser: every loaded playlist by name, which one is shown and which one plays.
+      std::wstring shownId = PlaylistId(pl.Get()), playingId;
+      if (auto mgr = Service<IAIMPServicePlaylistManager>(IID_IAIMPServicePlaylistManager)) {
+        Ref<IAIMPPlaylist> playingPl;
+        if (SUCCEEDED(mgr->GetPlayingPlaylist(playingPl.Put())) && playingPl) playingId = PlaylistId(playingPl.Get());
+        for (int i = 0, n = mgr->GetLoadedPlaylistCount(); i < n; i++) {
+          Ref<IAIMPPlaylist> p;
+          if (FAILED(mgr->GetLoadedPlaylist(i, p.Put())) || !p) continue;
+          Ref<IAIMPPropertyList> pp;
+          std::wstring name;
+          if (SUCCEEDED(p->QueryInterface(IID_IAIMPPropertyList, pp.PutVoid())) && pp)
+            name = PropString(pp.Get(), AIMP_PLAYLIST_PROPID_NAME);
+          std::wstring id = PlaylistId(p.Get());
+          if (id == shownId) shown = (int)names.size();
+          if (!playingId.empty() && id == playingId) playingIndex = (int)names.size();
+          names.push_back(name.empty() ? L"Плейлист " + std::to_wstring(i + 1) : name);
+        }
+      }
       Ref<IAIMPPropertyList> props;
       int playing = -1;
       if (SUCCEEDED(pl->QueryInterface(IID_IAIMPPropertyList, props.PutVoid())) && props) {
         title = PropString(props.Get(), AIMP_PLAYLIST_PROPID_NAME);
         INT32 v = -1;
-        if (SUCCEEDED(props->GetValueAsInt32(AIMP_PLAYLIST_PROPID_PLAYINGINDEX, &v))) playing = v;
+        // Only the playing playlist marks a row as playing.
+        if ((playingId.empty() || playingId == shownId) &&
+            SUCCEEDED(props->GetValueAsInt32(AIMP_PLAYLIST_PROPID_PLAYINGINDEX, &v)))
+          playing = v;
       }
       const int n = pl->GetItemCount();
       rows.reserve(n);
@@ -833,10 +902,13 @@ void Controller::RefreshList() {
     if (n > 0) title = up.substr(0, n);
   }
   const glass::Nav nav = m_nav;
-  m_window.Post([rows = std::move(rows), title, nav](glass::Model& m) mutable {
+  m_window.Post([rows = std::move(rows), title, nav, names = std::move(names), shown, playingIndex](glass::Model& m) mutable {
     m.rows = std::move(rows);
     m.listTitle = title;
     m.nav = nav;
+    m.playlists = std::move(names);
+    m.playlistShown = shown;
+    m.playlistPlaying = playingIndex;
   });
 }
 
@@ -941,6 +1013,14 @@ void Controller::OnAction(const Action& a) {
       m_nav = (glass::Nav)std::clamp(a.index, 0, 3);
       RefreshList();
       break;
+    case Act::Playlist:
+      if (auto mgr = Service<IAIMPServicePlaylistManager>(IID_IAIMPServicePlaylistManager)) {
+        Ref<IAIMPPlaylist> p;
+        if (SUCCEEDED(mgr->GetLoadedPlaylist(a.index, p.Put())) && p) mgr->SetActivePlaylist(p.Get());
+      }
+      m_nav = glass::Nav::Playlists;
+      RefreshList();
+      break;
     case Act::Like:
       if (!m_track.path.empty()) {
         m_lib.SetFavorite(m_track, a.value != 0);
@@ -962,11 +1042,21 @@ void Controller::OnAction(const Action& a) {
     case Act::Scan:
       ScanFolders();
       break;
-    case Act::AimpOption:
-      if (a.index == (int)glass::QuickItem::Fading)
-        if (auto cfg = Service<IAIMPServiceConfig>(IID_IAIMPServiceConfig))
-          cfg->SetValueAsInt32(MakeString(L"AIMPSoundOut\\FadingEnabled").Get(), a.value != 0 ? 1 : 0);
+    case Act::AimpOption: {
+      const bool on = a.value != 0;
+      Ref<IAIMPPropertyList> props;
+      player->QueryInterface(IID_IAIMPPropertyList, props.PutVoid());
+      if (a.index == (int)glass::QuickItem::Fading && props) {
+        props->SetValueAsInt32(AIMP_PLAYER_PROPID_AUTOSWITCHING, on ? 1 : 0);
+      } else if (a.index == (int)glass::QuickItem::PauseBetween && props) {
+        props->SetValueAsInt32(AIMP_PLAYER_PROPID_AUTOSWITCHING_PAUSE_BETWEEN_TRACKS, on ? 800 : 0);
+      } else if (a.index == (int)glass::QuickItem::Equalizer) {
+        BOOL v = on;
+        d->Send(AIMP_MSG_PROPERTY_EQUALIZER, AIMP_MSG_PROPVALUE_SET, &v);
+      }
+      PostOptions();  // show what AIMP actually took
       break;
+    }
     case Act::AimpSettings: d->Send(AIMP_MSG_CMD_OPTIONS, 0, nullptr); break;
     case Act::Classic: ShowClassic(); break;
     case Act::Quit: d->Send(AIMP_MSG_CMD_QUIT, 0, nullptr); break;

@@ -6,6 +6,9 @@
 namespace glass {
 namespace {
 
+// A low quick settings panel puts its two buttons side by side to leave the rows more room.
+bool QuickLow(const Layout& L) { return L.quick.H() < 640; }
+
 // Section headings in the quick settings panel come before these items.
 bool StartsSection(QuickItem i) {
   return i == QuickItem::Fading || i == QuickItem::Background || i == QuickItem::AutoScan;
@@ -13,15 +16,37 @@ bool StartsSection(QuickItem i) {
 
 }  // namespace
 
+bool IsQuickSlider(QuickItem i) {
+  return i == QuickItem::Ribbons || i == QuickItem::Beat || i == QuickItem::Frost || i == QuickItem::Mono;
+}
+
+int* QuickSliderValue(GlassSettings& s, QuickItem i) {
+  switch (i) {
+    case QuickItem::Ribbons: return &s.ribbons;
+    case QuickItem::Beat: return &s.beat;
+    case QuickItem::Frost: return &s.frost;
+    case QuickItem::Mono: return &s.mono;
+    default: return nullptr;
+  }
+}
+
+int QuickSliderMax(QuickItem i) { return i == QuickItem::Ribbons || i == QuickItem::Beat ? 200 : 100; }
+
 int QuickRows(const Layout& L, QuickRow* out, int max) {
   const Rc& q = L.quick;
-  float y = q.t + 64;  // under the heading and the close button
+  // Natural sizes, scaled down together when the panel is too low for them.
+  const float top = q.t + (QuickLow(L) ? 56 : 64), bottom = QuickAimpSettingsRect(L).t - 10;
+  float rowH = 40, themeH = 44, sectionH = 30, gap = 4;
+  float need = 3 * sectionH + ((int)QuickItem::Count - 1) * (rowH + gap) + themeH + gap;
+  float k = std::clamp((bottom - top) / need, 0.6f, 1.f);
+  rowH *= k, themeH *= k, sectionH *= k, gap *= k;
+  float y = top;
   int n = 0;
   for (int i = 0; i < (int)QuickItem::Count && n < max; i++) {
     QuickItem it = (QuickItem)i;
-    if (StartsSection(it)) y += 30;  // section title
-    const bool slider = it == QuickItem::Ribbons || it == QuickItem::Beat;
-    const float h = it == QuickItem::Theme ? 44.f : 40.f;
+    if (StartsSection(it)) y += sectionH;  // section title
+    const bool slider = IsQuickSlider(it);
+    const float h = it == QuickItem::Theme ? themeH : rowH;
     QuickRow r;
     r.item = it;
     r.rc = Rc{q.l + 16, y, q.r - 16, y + h};
@@ -32,16 +57,23 @@ int QuickRows(const Layout& L, QuickRow* out, int max) {
     else
       r.control = Rc{r.rc.r - 40, r.rc.Cy() - 11, r.rc.r, r.rc.Cy() + 11};
     out[n++] = r;
-    y += h + 4;
+    y += h + gap;
   }
   return n;
 }
 
 Rc QuickCloseRect(const Layout& L) { return Rc{L.quick.r - 16 - 32, L.quick.t + 16, L.quick.r - 16, L.quick.t + 48}; }
+
 Rc QuickAimpSettingsRect(const Layout& L) {
-  return Rc{L.quick.l + 16, L.quick.b - 16 - 40 - 8 - 40, L.quick.r - 16, L.quick.b - 16 - 40 - 8};
+  const Rc& q = L.quick;
+  if (QuickLow(L)) return Rc{q.l + 16, q.b - 14 - 34, q.Cx() - 4, q.b - 14};
+  return Rc{q.l + 16, q.b - 16 - 40 - 8 - 40, q.r - 16, q.b - 16 - 40 - 8};
 }
-Rc QuickClassicRect(const Layout& L) { return Rc{L.quick.l + 16, L.quick.b - 16 - 40, L.quick.r - 16, L.quick.b - 16}; }
+Rc QuickClassicRect(const Layout& L) {
+  const Rc& q = L.quick;
+  if (QuickLow(L)) return Rc{q.Cx() + 4, q.b - 14 - 34, q.r - 16, q.b - 14};
+  return Rc{q.l + 16, q.b - 16 - 40, q.r - 16, q.b - 16};
+}
 
 float MaxScroll(const Layout& L, int rowCount) { return std::max(0.f, rowCount * L.rowHeight - L.rows.H()); }
 
@@ -78,7 +110,7 @@ HitResult HitTest(const Layout& L, const Model& m, const UiState& s, float x, fl
         int chip = (int)std::floor(Fraction(rows[i].control, x) * 3);
         return {Hit::QuickTheme, std::clamp(chip, 0, 2)};
       }
-      if (rows[i].item == QuickItem::Ribbons || rows[i].item == QuickItem::Beat)
+      if (IsQuickSlider(rows[i].item))
         return in(rows[i].control) ? HitResult{Hit::QuickSlider, (int)rows[i].item} : HitResult{Hit::QuickPanel};
       return {Hit::QuickToggle, (int)rows[i].item};  // the whole row toggles
     }
@@ -104,6 +136,8 @@ HitResult HitTest(const Layout& L, const Model& m, const UiState& s, float x, fl
   if (in(L.wave)) return {Hit::Wave};
 
   if (in(L.search)) return {Hit::Search};
+  // The list title chooses among AIMP's playlists (only in the Playlists view, when there is a choice).
+  if (m.nav == Nav::Playlists && m.playlists.size() > 1 && in(L.listTitle)) return {Hit::ListTitle};
   if (in(L.rows)) {
     int r = RowAt(L, s, (int)m.visible.size(), y);
     return r >= 0 ? HitResult{Hit::Row, r} : HitResult{Hit::ListBackground};

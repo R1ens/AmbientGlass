@@ -19,6 +19,8 @@ struct SceneOptions {
   float ribbons = 1.0f;     // intensity of mass and filaments
   float rays = 1.0f;        // intensity of the rays
   float dither = 1.5f;      // amplitude in 8-bit steps
+  float frost = 1.0f;       // glass: 0 = clear inside (frosted rim only), 1 = fully frosted
+  float mono = 0.0f;        // 0 = colours, 1 = black background with silver light
   uint32_t seed = 0;        // dither pattern offset (fixed in tests)
 };
 

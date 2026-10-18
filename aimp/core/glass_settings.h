@@ -10,6 +10,8 @@
   X(bool, spectrum, 1, 0, 1)               \
   X(int, ribbons, 100, 0, 200)             \
   X(int, beat, 100, 0, 200)                \
+  X(int, frost, 100, 0, 100)               \
+  X(int, mono, 0, 0, 100)                  \
   X(int, theme, 0, 0, 2)                   \
   X(bool, autoScan, 1, 0, 1)               \
   X(bool, hideAimp, 1, 0, 1)               \

@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "../../aimp/core/layout.h"
+#include "../../aimp/core/ui_state.h"
 #include "../test_framework.h"
 
 using namespace glass;
@@ -100,9 +101,45 @@ TEST(layout_title_bar_buttons_and_caption) {
   CHECK(L.btnMax.r <= L.btnClose.l);
 }
 
+TEST(layout_list_title_is_left_of_search_and_clickable_with_a_choice) {
+  for (auto& s : kSizes) {
+    Layout L = ComputeLayout(s[0], s[1]);
+    CHECK(L.listTitle.Valid());
+    CHECK(L.listTitle.r <= L.search.l);
+    CHECK(Inside(L.listTitle, L.listHead));
+  }
+  Layout L = ComputeLayout(1280, 800);
+  Model m;
+  UiState st;
+  float x = L.listTitle.l + 20, y = L.listTitle.Cy();
+  m.playlists = {L"Default"};
+  CHECK(HitTest(L, m, st, x, y).hit != Hit::ListTitle);  // one playlist: nothing to choose
+  m.playlists = {L"Default", L"Rock"};
+  CHECK(HitTest(L, m, st, x, y).hit == Hit::ListTitle);
+  m.nav = Nav::Favorites;
+  CHECK(HitTest(L, m, st, x, y).hit != Hit::ListTitle);  // only in the Playlists view
+}
+
+TEST(layout_quick_settings_rows_fit_above_the_buttons) {
+  for (auto& s : kSizes) {
+    Layout L = ComputeLayout(s[0], s[1]);
+    QuickRow rows[(int)QuickItem::Count];
+    int n = QuickRows(L, rows, (int)QuickItem::Count);
+    CHECK_EQ(n, (int)QuickItem::Count);
+    CHECK(rows[n - 1].rc.b <= QuickAimpSettingsRect(L).t);
+    CHECK(rows[0].rc.t >= L.quick.t + 40);
+    for (int i = 0; i + 1 < n; i++) CHECK(rows[i].rc.b <= rows[i + 1].rc.t);
+    for (int i = 0; i < n; i++) CHECK(rows[i].rc.H() >= 26);  // still easy to hit
+    CHECK(QuickAimpSettingsRect(L).r <= QuickClassicRect(L).l || QuickAimpSettingsRect(L).b <= QuickClassicRect(L).t);
+  }
+}
+
 TEST(layout_quick_settings_on_the_right) {
   Layout L = ComputeLayout(1920, 1080);
   CHECK_NEAR(L.quick.W(), 360.f, 0.01);
-  CHECK(L.quick.b <= L.bottom.t);
+  CHECK(L.quick.b <= L.bottom.t);  // tall windows: above the bottom bar
   CHECK(L.quick.t >= L.titlebar.b);
+  Layout low = ComputeLayout(880, 600);
+  CHECK(low.quick.b <= low.h);     // low windows: may cover the bottom bar, never past the window
+  CHECK(low.quick.b > low.bottom.t);
 }

@@ -14,7 +14,7 @@ enum class Hit {
   Min, Max, Close, Caption,
   Nav0, Nav1, Nav2, Nav3, AddFolder, Scan, NavSettings,
   Cover, Shuffle, Prev, Play, Next, Repeat, Like, More, Wave,
-  Search, Row, ListBackground,
+  Search, Row, ListBackground, ListTitle,
   BPrev, BPlay, BNext, Volume, Settings,
   // Quick settings panel
   QuickPanel, QuickClose, QuickToggle, QuickSlider, QuickTheme, QuickAimpSettings, QuickClassic,
@@ -27,9 +27,9 @@ struct HitResult {
 
 // The quick settings panel lists these items, top to bottom.
 enum class QuickItem {
-  Fading,                            // AIMP playback (toggle)
+  Fading, PauseBetween, Equalizer,   // AIMP playback (toggles, through the player's documented properties)
   Background, CoverGlow, Spectrum,   // appearance (toggles)
-  Ribbons, Beat,                     // appearance (sliders 0..200)
+  Ribbons, Beat, Frost, Mono,        // appearance (sliders)
   Theme,                             // three chips
   AutoScan,                          // library (toggle)
   Count
@@ -41,8 +41,13 @@ struct QuickRow {
   Rc control;     // the switch, slider track or chips
 };
 
-// Rows of the quick settings panel inside L.quick (section headings sit between them).
+// Rows of the quick settings panel inside L.quick (section headings sit between them). A low panel packs
+// the rows tighter so they always end above the two buttons at the bottom.
 int QuickRows(const Layout& L, QuickRow* out, int max);
+bool IsQuickSlider(QuickItem i);
+// The setting a slider edits and its range (0..max).
+int* QuickSliderValue(GlassSettings& s, QuickItem i);
+int QuickSliderMax(QuickItem i);
 Rc QuickCloseRect(const Layout& L);
 Rc QuickAimpSettingsRect(const Layout& L);
 Rc QuickClassicRect(const Layout& L);
@@ -54,7 +59,7 @@ struct UiState {
   size_t caret = 0;          // in Model::query
   float likeFlash = 0;       // 1 right after a like, decays
   bool maximized = false;
-  bool draggingWave = false, draggingVolume = false;
+  bool draggingWave = false, draggingVolume = false, draggingSlider = false;
   float dragValue = 0;       // 0..1 while dragging the wave or volume
 };
 

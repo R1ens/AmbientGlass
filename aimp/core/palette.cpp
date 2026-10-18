@@ -60,6 +60,24 @@ struct Sample {
   float weight;
 };
 
+// A grey cover (black-and-white photo, a drawing): its light, middle and dark tones, kept nearly neutral with
+// a faint cool and warm cast so the glow reads as light, not as a flat grey. A brighter cover glows brighter.
+Palette MonochromePalette(const std::vector<Sample>& samples) {
+  std::vector<float> ls;
+  ls.reserve(samples.size());
+  for (const Sample& s : samples) ls.push_back(s.lab.L);
+  std::sort(ls.begin(), ls.end());
+  auto at = [&](float q) { return ls[std::min(ls.size() - 1, (size_t)(q * (ls.size() - 1) + 0.5f))]; };
+  const float hi = at(0.85f), mid = at(0.5f), lo = at(0.15f);
+  Palette p;
+  p.monochrome = true;
+  p.accent[0] = FromOklab(Lab{std::clamp(0.30f + 0.60f * hi, 0.55f, 0.88f), -0.004f, -0.018f});   // cool light
+  p.accent[1] = FromOklab(Lab{std::clamp(0.30f + 0.50f * mid, 0.50f, 0.78f), 0.006f, 0.014f});   // warm middle
+  p.accent[2] = FromOklab(Lab{std::clamp(0.30f + 0.45f * lo, 0.45f, 0.68f), -0.008f, -0.026f});  // deep cool
+  p.blob = p.accent[0];  // silver
+  return p;
+}
+
 }  // namespace
 
 Lab ToOklab(Rgb c) {
@@ -96,6 +114,7 @@ Palette DefaultPalette() {
   p.accent[0] = Hex(0x8B7CFF);
   p.accent[1] = Hex(0xFF6B9D);
   p.accent[2] = Hex(0x00E5FF);
+  p.blob = p.accent[0];
   p.fallback = true;
   return p;
 }
@@ -131,7 +150,8 @@ Palette ExtractPalette(const uint8_t* rgba, int width, int height, int stride) {
     float light = 1.f - std::fabs(lab.L - 0.62f) / 0.62f;
     samples.push_back({lab, (0.15f + 4.f * ch) * std::max(0.05f, light)});
   }
-  if (samples.empty() || maxChroma < kGreyChroma) return DefaultPalette();
+  if (samples.empty()) return DefaultPalette();
+  if (maxChroma < kGreyChroma) return MonochromePalette(samples);
 
   // k-means with a deterministic farthest-point start, seeded by the heaviest sample.
   std::vector<Lab> centres;
@@ -214,6 +234,33 @@ Palette ExtractPalette(const uint8_t* rgba, int width, int height, int stride) {
   p.accent[0] = FromOklab(Vivid(main));
   p.accent[1] = FromOklab(Vivid(secondLab));
   p.accent[2] = FromOklab(Vivid(thirdLab));
+
+  // The blob colour: among the clusters other than the dominant one (the largest), the best accent for it:
+  // saturated, a clearly different hue, and not a speck. One-colour covers fall back to the second tone.
+  // Shares by area (plain pixel counts): the weights above favour colourful pixels, which is right for the
+  // accents but would let a small vivid speck pass as a real part of the cover.
+  std::vector<int> count(k, 0);
+  for (int o : owner) count[o]++;
+  int dominant = 0;
+  for (int c = 0; c < k; c++)
+    if (count[c] > count[dominant]) dominant = c;
+  int best = -1;
+  float bestScore = 0;
+  for (int c = 0; c < k; c++) {
+    if (c == dominant || Chroma(centres[c]) < kGreyChroma) continue;
+    const float share = (float)count[c] / (float)samples.size();
+    if (share < 0.03f) continue;
+    const float hue = Chroma(centres[dominant]) > kGreyChroma ? HueDistanceDeg(centres[dominant], centres[c]) : 90.f;
+    const float fit = std::pow(Chroma(centres[c]), 0.7f) * (0.35f + hue / 180.f) * std::sqrt(share);
+    if (fit > bestScore) bestScore = fit, best = c;
+  }
+  if (best >= 0) {
+    p.blob = FromOklab(Vivid(centres[best]));
+  } else {
+    // No real accent: a neighbouring hue of the main colour, as for one-colour covers.
+    float h = std::atan2(main.b, main.a) + 40.f * kPi / 180.f, ch = std::max(Chroma(main), 0.1f);
+    p.blob = FromOklab(Vivid(Lab{main.L, ch * std::cos(h), ch * std::sin(h)}));
+  }
   return p;
 }
 
@@ -224,7 +271,12 @@ Palette MixPalettes(const Palette& a, const Palette& b, float t) {
     Lab x = ToOklab(a.accent[i]), y = ToOklab(b.accent[i]);
     p.accent[i] = FromOklab(Lab{x.L + (y.L - x.L) * t, x.a + (y.a - x.a) * t, x.b + (y.b - x.b) * t});
   }
+  {
+    Lab x = ToOklab(a.blob), y = ToOklab(b.blob);
+    p.blob = FromOklab(Lab{x.L + (y.L - x.L) * t, x.a + (y.a - x.a) * t, x.b + (y.b - x.b) * t});
+  }
   p.fallback = t < 0.5f ? a.fallback : b.fallback;
+  p.monochrome = t < 0.5f ? a.monochrome : b.monochrome;
   return p;
 }
 

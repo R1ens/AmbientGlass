@@ -34,7 +34,7 @@ struct Layout {
   Rc btnShuffle, btnPrev, btnPlay, btnNext, btnRepeat, btnLike, btnMore;
 
   Rc list;  // playlist glass panel
-  Rc listHead, search, tableHead, rows;
+  Rc listHead, listTitle, search, tableHead, rows;  // listTitle: the clickable title (playlist chooser)
   float rowHeight = 40;
   float colNum = 28, colAlbum = 120, colDur = 48, colGap = 8;
 

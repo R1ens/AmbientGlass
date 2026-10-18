@@ -120,6 +120,7 @@ Layout ComputeLayout(float width, float height) {
     const Rc& p = L.list;
     L.listHead = R(p.l + 12, p.t + 14, p.r - 12, p.t + 14 + 30);
     L.search = R(L.listHead.r - 220, L.listHead.t, L.listHead.r, L.listHead.b);
+    L.listTitle = R(L.listHead.l, L.listHead.t, L.search.l - 12, L.listHead.b);
     // A low panel drops the column headings so at least two rows stay visible.
     if (p.H() >= 200) {
       L.tableHead = R(p.l + 12, L.listHead.b + 6, p.r - 12, L.listHead.b + 6 + 24);
@@ -144,7 +145,8 @@ Layout ComputeLayout(float width, float height) {
     L.miniText = R(L.miniCover.r + 14, cy - 20, L.bPrev.l - 14, cy + 20);
   }
 
-  L.quick = R(W - kPad - 360, kTitle + kPad, W - kPad, L.bottom.t - kGap);
+  // Quick settings: a modal panel on the right; low windows let it reach over the bottom bar.
+  L.quick = R(W - kPad - 360, kTitle + kPad, W - kPad, H < 760 ? H - kPad : L.bottom.t - kGap);
   return L;
 }
 

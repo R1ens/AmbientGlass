@@ -13,6 +13,8 @@ struct AudioFrame {
   float bars[SpectrumBars::kCount] = {};
   float bass = 0, high = 0, pulse = 0;
   unsigned beats = 0;  // counts beats, so a reader can tell a new one arrived
+  float bpm = 0;       // tempo from the beats, 70..180; 0 while unknown (too few beats, or none for a while)
+  float loud = 0;      // loudness relative to the loudest of the last ~10 s, 0..1, smoothed
 };
 
 class AudioAnalyzer {
@@ -31,6 +33,9 @@ class AudioAnalyzer {
   BeatDetector m_beat;
   AudioFrame m_frame;
   float m_peak[SpectrumBars::kCount] = {};
+  float m_now = 0, m_lastBeat = -1e9f, m_loudPeak = 1e-6f;
+  float m_intervals[16] = {};
+  int m_intervalCount = 0, m_intervalHead = 0;
 };
 
 }  // namespace glass

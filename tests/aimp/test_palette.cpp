@@ -43,16 +43,30 @@ TEST(palette_oklab_round_trip) {
   }
 }
 
-TEST(palette_grey_cover_uses_default_set) {
+namespace {
+Picture GreyCover(int lo, int hi) {
   Picture p(300, 300);
   for (int y = 0; y < 300; y++)
     for (int x = 0; x < 300; x++) {
-      uint8_t v = (uint8_t)((x + y) * 255 / 598);
+      uint8_t v = (uint8_t)(lo + (x + y) * (hi - lo) / 598);
       p.Set(x, y, (uint32_t)v << 16 | (uint32_t)v << 8 | v);
     }
-  Palette pal = p.Extract();
-  CHECK(pal.fallback);
-  CHECK(SameRgb(pal.accent[0], DefaultPalette().accent[0]));
+  return p;
+}
+}  // namespace
+
+TEST(palette_grey_cover_gives_near_neutral_tones_from_its_brightness) {
+  Palette pal = GreyCover(0, 255).Extract();
+  CHECK(!pal.fallback);
+  CHECK(pal.monochrome);
+  for (const Rgb& c : pal.accent) CHECK(Chroma(ToOklab(c)) < 0.04f);
+  // Light, middle and deep tones in that order.
+  CHECK(ToOklab(pal.accent[0]).L > ToOklab(pal.accent[1]).L);
+  CHECK(ToOklab(pal.accent[1]).L > ToOklab(pal.accent[2]).L);
+  // A brighter cover glows brighter than a dark one.
+  Palette dark = GreyCover(10, 90).Extract(), light = GreyCover(160, 250).Extract();
+  CHECK(dark.monochrome && light.monochrome);
+  CHECK(ToOklab(light.accent[0]).L > ToOklab(dark.accent[0]).L + 0.08f);
 }
 
 TEST(palette_empty_input_uses_default_set) {
@@ -82,6 +96,31 @@ TEST(palette_two_colours_become_main_and_second) {
   bool blueFirst = HueDistanceDeg(a0, blue) < 15.f && HueDistanceDeg(a1, orange) < 15.f;
   bool orangeFirst = HueDistanceDeg(a0, orange) < 15.f && HueDistanceDeg(a1, blue) < 15.f;
   CHECK(blueFirst || orangeFirst);
+}
+
+TEST(palette_blob_is_the_accent_not_the_dominant_colour) {
+  // A mostly blue cover with an orange quarter: the blob takes the orange.
+  Picture p(256, 256);
+  p.Fill(0, 0, 256, 256, 0x1E5AA8);
+  p.Fill(0, 192, 256, 256, 0xF08A24);
+  Palette pal = p.Extract();
+  CHECK(HueDistanceDeg(ToOklab(pal.blob), LabOf(0xF08A24)) < 15.f);
+  // Its lightness is made fit to glow, like the accents.
+  CHECK(ToOklab(pal.blob).L >= 0.57f);
+}
+
+TEST(palette_blob_ignores_specks_and_greys) {
+  // Blue cover, a 1% red speck and a large grey band: no accent qualifies, the blob is the second tone.
+  Picture p(200, 200);
+  p.Fill(0, 0, 200, 200, 0x1E5AA8);
+  p.Fill(0, 120, 200, 200, 0x808080);
+  p.Fill(0, 0, 20, 20, 0xE02020);
+  Palette pal = p.Extract();
+  CHECK(HueDistanceDeg(ToOklab(pal.blob), LabOf(0xE02020)) > 30.f);
+  // A grey cover gives a silver blob.
+  Picture g(100, 100);
+  g.Fill(0, 0, 100, 100, 0x909090);
+  CHECK(Chroma(ToOklab(g.Extract().blob)) < 0.04f);
 }
 
 TEST(palette_small_vivid_patch_beats_large_dark_area) {

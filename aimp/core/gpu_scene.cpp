@@ -31,6 +31,7 @@ struct alignas(16) GlassCB {
   float info[4];
   float coverRc[4];
   float dim[4];
+  float fx[4];
   float panels[kMaxPanels][4];
 };
 static_assert(sizeof(GlassCB) % 16 == 0, "constant buffer size");
@@ -130,13 +131,13 @@ void FillCommon(GlassCB& cb, UINT w, UINT h, float scale, const Model& m, const 
   cb.centre[0] = cx, cb.centre[1] = cy, cb.centre[2] = L.cover.W() * 0.5f * scale, cb.centre[3] = reach;
   cb.audio[0] = m.bass, cb.audio[1] = m.high, cb.audio[2] = m.pulse, cb.audio[3] = m.time;
   const float ribbons = o.background ? o.ribbons : 0.f, rays = o.background ? o.rays : 0.f;
-  SetRgb(cb.col0, m.palette.accent[0], ribbons);
+  SetRgb(cb.col0, m.palette.blob, ribbons);
   SetRgb(cb.col1, m.palette.accent[1], rays);
   SetRgb(cb.col2, m.palette.accent[2], o.coverGlow ? 1.f : 0.f);
 
   const bool light = m.theme == Theme::Light, amoled = m.theme == Theme::Amoled;
   const Rgb base = amoled ? Rgb{0, 0, 0} : light ? Rgb{0.86f, 0.86f, 0.89f} : Rgb{10 / 255.f, 10 / 255.f, 14 / 255.f};
-  SetRgb(cb.base, base, light ? 0.55f : 0.08f);
+  SetRgb(cb.base, base, light ? 0.30f : 0.08f);
   cb.panelSt[0] = kPanelRadius * scale;
   cb.panelSt[1] = light ? 0.35f : 0.14f;
   cb.panelSt[2] = light ? 0.12f : 0.35f;
@@ -145,6 +146,11 @@ void FillCommon(GlassCB& cb, UINT w, UINT h, float scale, const Model& m, const 
   cb.info[2] = (float)(o.seed % 997);
   cb.info[3] = 1.6f;
   SetRc(cb.coverRc, L.cover, scale);
+  cb.dim[2] = light ? 1.f : 0.f;
+  cb.fx[0] = std::clamp(o.frost, 0.f, 1.f);
+  cb.fx[1] = std::clamp(o.mono, 0.f, 1.f);
+  cb.fx[2] = std::clamp(m.loud, 0.f, 1.f);
+  cb.fx[3] = m.bpm > 0 ? std::clamp((m.bpm - 80.f) / 80.f, 0.f, 1.f) : 0.3f;
 }
 
 }  // namespace

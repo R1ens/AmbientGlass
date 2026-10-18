@@ -21,7 +21,7 @@ constexpr wchar_t kIcHeart = 0xEB51, kIcHeartFill = 0xEB52, kIcMore = 0xE712, kI
 constexpr wchar_t kIcSearch = 0xE721, kIcVolume = 0xE767, kIcMute = 0xE74F, kIcFolder = 0xE8B7;
 constexpr wchar_t kIcPlaylist = 0xE90B, kIcRecent = 0xE81C, kIcAdd = 0xE710, kIcRefresh = 0xE72C;
 constexpr wchar_t kIcMin = 0xE921, kIcMax = 0xE922, kIcRestore = 0xE923, kIcClose = 0xE8BB, kIcMusic = 0xE8D6;
-constexpr wchar_t kIcCancel = 0xE711, kIcAudio = 0xE189;
+constexpr wchar_t kIcCancel = 0xE711, kIcAudio = 0xE189, kIcChevronDown = 0xE70D;
 
 D2D1_COLOR_F C(float r, float g, float b, float a = 1) { return D2D1::ColorF(r, g, b, a); }
 D2D1_COLOR_F Hex(uint32_t v, float a = 1) {
@@ -197,6 +197,15 @@ bool UiPainter::Begin(ID3D11Texture2D* target, float scale, const Model& m) {
   m_a0 = FromRgb(m.palette.accent[0]);
   m_a1 = FromRgb(m.palette.accent[1]);
   m_a2 = FromRgb(m.palette.accent[2]);
+  // Black and silver reaches the interface accents too (buttons, waveform, spectrum); the cover keeps its colours.
+  if (m.settings.mono > 0) {
+    const float k = m.settings.mono / 100.f;
+    for (D2D1_COLOR_F* a : {&m_a0, &m_a1, &m_a2}) {
+      float l = 0.2126f * a->r + 0.7152f * a->g + 0.0722f * a->b;
+      float sr = l * 0.94f, sg = l * 0.97f, sb = l;
+      a->r += (sr - a->r) * k, a->g += (sg - a->g) * k, a->b += (sb - a->b) * k;
+    }
+  }
   m_text = m_light ? Hex(0x1A1A22) : Hex(0xF2F2F5);
   m_dim = m_light ? Hex(0x1A1A22, 0.55f) : Hex(0xF2F2F5, 0.55f);
   m_time = m.time;
@@ -462,16 +471,28 @@ void UiPainter::List(const Model& m, const Layout& L, const UiState& s) {
   const Rc& h = L.listHead;
   std::wstring title = m.listTitle.empty() ? L"ПЛЕЙЛИСТ" : m.listTitle;
   Rc tr = Rc{h.l + 4, h.t, L.search.l - 12, h.b};
-  Text(title, tr, 12, m_text, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING, false, 0.5f);
-  // Summary after the title: measure the title to place it.
+  const bool chooser = m.nav == Nav::Playlists && m.playlists.size() > 1;
+  float titleW = 0;
   if (IDWriteTextFormat* f = Format(12, DWRITE_FONT_WEIGHT_BOLD)) {
     ComPtr<IDWriteTextLayout> lay;
     if (SUCCEEDED(m_dw->CreateTextLayout(title.c_str(), (UINT32)title.size(), f, tr.W(), tr.H(), &lay))) {
       DWRITE_TEXT_METRICS tm{};
       lay->GetMetrics(&tm);
-      Text(ListSummary(m), Rc{tr.l + tm.width + 10, h.t, tr.r, h.b}, 11, m_dim);
+      titleW = std::min(tm.width + 0.6f * title.size(), tr.W() * 0.6f);  // + letter spacing
     }
   }
+  if (chooser) {
+    // The title is a button: a pill on hover and a chevron after it.
+    Rc pill = Rc{tr.l - 6, h.t + 2, tr.l + titleW + 26, h.b - 2};
+    if (s.hover.hit == Hit::ListTitle) RoundFill(pill, 8, Solid(m_light ? C(0, 0, 0, 0.06f) : C(1, 1, 1, 0.08f)));
+    Text(title, Rc{tr.l, h.t, tr.l + titleW + 2, h.b}, 12, m_text, DWRITE_FONT_WEIGHT_BOLD,
+         DWRITE_TEXT_ALIGNMENT_LEADING, false, 0.5f);
+    Icon(kIcChevronDown, Rc{tr.l + titleW + 4, h.t, tr.l + titleW + 20, h.b}, 9, m_dim);
+    titleW += 22;
+  } else {
+    Text(title, tr, 12, m_text, DWRITE_FONT_WEIGHT_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING, false, 0.5f);
+  }
+  Text(ListSummary(m), Rc{tr.l + titleW + 10, h.t, tr.r, h.b}, 11, m_dim);
 
   // Search box.
   const Rc& sb = L.search;
@@ -654,11 +675,15 @@ void UiPainter::Quick(const Model& m, const Layout& L, const UiState& s) {
     int value = 0;
     switch (r.item) {
       case QuickItem::Fading: label = L"Плавные переходы"; on = m.aimpFading; break;
+      case QuickItem::PauseBetween: label = L"Пауза между треками"; on = m.aimpPause; break;
+      case QuickItem::Equalizer: label = L"Эквалайзер"; on = m.aimpEq; break;
       case QuickItem::Background: label = L"Живой фон"; on = m.settings.background; break;
       case QuickItem::CoverGlow: label = L"Свечение обложки"; on = m.settings.coverGlow; break;
       case QuickItem::Spectrum: label = L"Спектр под обложкой"; on = m.settings.spectrum; break;
       case QuickItem::Ribbons: label = L"Яркость лент"; value = m.settings.ribbons; break;
       case QuickItem::Beat: label = L"Реакция на бит"; value = m.settings.beat; break;
+      case QuickItem::Frost: label = L"Матовость стекла"; value = m.settings.frost; break;
+      case QuickItem::Mono: label = L"Чёрно-белый фон"; value = m.settings.mono; break;
       case QuickItem::AutoScan: label = L"Сканировать папки при запуске"; on = m.settings.autoScan; break;
       default: break;
     }
@@ -674,12 +699,13 @@ void UiPainter::Quick(const Model& m, const Layout& L, const UiState& s) {
       }
       continue;
     }
-    Text(label, Rc{r.rc.l + 10, r.rc.t, r.control.l - 8, r.rc.b}, 13, m_text, DWRITE_FONT_WEIGHT_MEDIUM);
-    if (r.item == QuickItem::Ribbons || r.item == QuickItem::Beat) {
+    Text(label, Rc{r.rc.l + 10, r.rc.t, r.control.l - 8, r.rc.b}, r.rc.H() < 34 ? 12.f : 13.f, m_text,
+         DWRITE_FONT_WEIGHT_MEDIUM);
+    if (IsQuickSlider(r.item)) {
       Rc tr = Rc{r.control.l, r.control.Cy() - 2, r.control.r, r.control.Cy() + 2};
       RoundFill(tr, 2, Solid(C(1, 1, 1, 0.12f)));
       Rc f = tr;
-      f.r = tr.l + tr.W() * value / 200.f;
+      f.r = tr.l + tr.W() * value / (float)QuickSliderMax(r.item);
       auto g = Gradient(tr, m_a0, m_a1);
       RoundFill(f, 2, g.Get());
       m_dc->FillEllipse(D2D1::Ellipse(D2D1::Point2F(f.r, tr.Cy()), 7, 7), Solid(C(1, 1, 1)));
@@ -694,11 +720,14 @@ void UiPainter::Quick(const Model& m, const Layout& L, const UiState& s) {
   Rc a = QuickAimpSettingsRect(L);
   RoundFill(a, 11, Solid(C(1, 1, 1, s.hover.hit == Hit::QuickAimpSettings ? 0.10f : 0.05f)));
   RoundStroke(a, 11, C(1, 1, 1, 0.14f));
-  Text(L"Все настройки AIMP…", a, 12.5f, m_text, DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_TEXT_ALIGNMENT_CENTER);
+  const bool narrowButtons = a.W() < 200;
+  Text(narrowButtons ? L"Настройки AIMP…" : L"Все настройки AIMP…", a, 12.5f, m_text,
+       DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_TEXT_ALIGNMENT_CENTER);
   Rc c = QuickClassicRect(L);
   RoundFill(c, 11, Solid(C(1, 1, 1, s.hover.hit == Hit::QuickClassic ? 0.10f : 0.05f)));
   RoundStroke(c, 11, C(1, 1, 1, 0.14f));
-  Text(L"Вернуть классический AIMP", c, 12.5f, m_text, DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_TEXT_ALIGNMENT_CENTER);
+  Text(narrowButtons ? L"Классический AIMP" : L"Вернуть классический AIMP", c, 12.5f, m_text,
+       DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_TEXT_ALIGNMENT_CENTER);
 }
 
 }  // namespace glass

@@ -46,12 +46,15 @@ bool Offscreen::Render(const Model& m, UINT w, UINT h, float scale, const SceneO
     return false;
 
   Layout L = ComputeLayout(w / scale, h / scale);
-  m_scene.Render(rtv.Get(), w, h, scale, m, L, o);
+  SceneOptions so = o;
+  so.frost = m.settings.frost / 100.f;
+  so.mono = m.settings.mono / 100.f;
+  m_scene.Render(rtv.Get(), w, h, scale, m, L, so);
   if (ui) {
     UiState s;
     m_painter->Paint(tex.Get(), scale, m, L, s);
     if (m.quickSettingsOpen) {
-      m_scene.RenderOverlay(rtv.Get(), w, h, scale, m, L, o);
+      m_scene.RenderOverlay(rtv.Get(), w, h, scale, m, L, so);
       m_painter->PaintQuick(tex.Get(), scale, m, L, s);
     }
     m_painter->ReleaseTarget();

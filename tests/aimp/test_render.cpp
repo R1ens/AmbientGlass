@@ -1,6 +1,7 @@
 // What the background does, measured on WARP renders: rays reach the window edges, a beat brightens the mass
 // around the cover, switching the background off leaves the plain dark base, the glass stays dark.
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
@@ -88,6 +89,50 @@ TEST(render_beat_brightens_the_mass) {
     }
   CHECK(n > 0);
   CHECK(sb / n > sa / n * 1.10);  // at least 10% brighter on the beat
+}
+
+namespace {
+// Mean absolute difference between horizontally neighbouring pixels: how much detail a region shows.
+double Detail(const rt::Image& img, const glass::Rc& r) {
+  double s = 0;
+  int n = 0;
+  for (UINT y = (UINT)r.t; y < (UINT)r.b; y += 2)
+    for (UINT x = (UINT)r.l; x + 2 < (UINT)r.r; x += 2) s += std::fabs(img.Luma(x + 2, y) - img.Luma(x, y)), n++;
+  return n ? s / n : 0;
+}
+}  // namespace
+
+TEST(render_clear_glass_shows_the_background_sharp) {
+  if (!rt::Warp()) return;
+  glass::Model frosted = demo::MakeModel(0), clear = demo::MakeModel(0);
+  clear.settings.frost = 0;
+  rt::Image a = Render(frosted, false), b = Render(clear, false);
+  glass::Layout L = glass::ComputeLayout(kW, kH);
+  // Deep inside the card (away from the frosted rim) the clear glass shows the rays' detail.
+  glass::Rc in{L.card.l + 30, L.card.t + 30, L.card.r - 30, L.card.b - 30};
+  CHECK(Detail(b, in) > Detail(a, in) * 1.5 + 0.2);
+  // The rim stays frosted: right at the edge both look alike.
+  glass::Rc rim{L.card.l + 2, L.card.t + 40, L.card.l + 5, L.card.b - 40};
+  double d = 0;
+  int n = 0;
+  for (UINT y = (UINT)rim.t; y < (UINT)rim.b; y += 3) d += std::fabs(a.Luma((UINT)rim.l, y) - b.Luma((UINT)rim.l, y)), n++;
+  CHECK(d / n < 6);
+}
+
+TEST(render_black_and_silver_has_no_colour_in_the_background) {
+  if (!rt::Warp()) return;
+  glass::Model m = demo::MakeModel(0);
+  m.settings.mono = 100;
+  rt::Image img = Render(m, false);
+  double chroma = 0;
+  int n = 0;
+  for (UINT y = 0; y < kH; y += 4)
+    for (UINT x = 0; x < kW; x += 4) {
+      const uint8_t* p = &img.bgra[((size_t)y * kW + x) * 4];
+      int mx = std::max({p[0], p[1], p[2]}), mn = std::min({p[0], p[1], p[2]});
+      chroma += mx - mn, n++;
+    }
+  CHECK(chroma / n < 4);  // only the faint cool cast of silver
 }
 
 TEST(render_glass_stays_dark) {

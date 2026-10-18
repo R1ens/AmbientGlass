@@ -12,10 +12,14 @@ struct Rgb {
 
 struct Palette {
   Rgb accent[3];          // main, second (a different hue when the cover has one), contrast
-  bool fallback = false;  // the cover is (nearly) grey: a neutral built-in set was used
+  // The one colour of the background blob: not the cover's dominant colour but the accent that sits best
+  // with it (a clearly different, saturated hue that still covers a fair part of the cover).
+  Rgb blob;
+  bool fallback = false;    // no usable cover: the built-in set was used
+  bool monochrome = false;  // a grey cover: near-neutral tones taken from its own brightness
 };
 
-// The built-in set for grey or missing covers: violet, pink, cyan.
+// The built-in set for missing covers: violet, pink, cyan.
 Palette DefaultPalette();
 
 // Pixels are 8-bit sRGB, 4 bytes each in R, G, B, A order (alpha ignored), rows `stride` bytes apart.
