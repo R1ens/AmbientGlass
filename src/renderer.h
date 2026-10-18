@@ -7,19 +7,11 @@
 #include <initializer_list>
 #include <string>
 
+#include "d3d_helpers.h"
 #include "glow_math.h"
 #include "layout.h"
 #include "luma_grid.h"
 #include "settings.h"
-
-using Microsoft::WRL::ComPtr;
-
-struct Tex {
-  ComPtr<ID3D11Texture2D> tex;
-  ComPtr<ID3D11ShaderResourceView> srv;
-  ComPtr<ID3D11RenderTargetView> rtv;
-  UINT w = 0, h = 0, mips = 1;
-};
 
 // Per-output scratch textures at glow resolution; the renderer sizes them as needed.
 struct GlowTargets {
@@ -67,21 +59,23 @@ class Renderer {
 
  private:
   struct CB;
-  bool MakeTex(Tex& t, UINT w, UINT h, UINT mips, DXGI_FORMAT format = DXGI_FORMAT_R16G16B16A16_FLOAT);
+  bool MakeTex(Tex& t, UINT w, UINT h, UINT mips, DXGI_FORMAT format = kGpuFormat) {
+    return ::MakeTex(m_device.Get(), t, w, h, mips, format);
+  }
   void Pass(ID3D11RenderTargetView* rtv, UINT w, UINT h, ID3D11PixelShader* ps,
-            std::initializer_list<ID3D11ShaderResourceView*> srvs, const CB& cb);
+            std::initializer_list<ID3D11ShaderResourceView*> srvs, const CB& cb) {
+    m_passes.Pass(rtv, w, h, ps, srvs, &cb);
+  }
   void Pass(std::initializer_list<ID3D11RenderTargetView*> rtvs, UINT w, UINT h, ID3D11PixelShader* ps,
-            std::initializer_list<ID3D11ShaderResourceView*> srvs, const CB& cb);
-  // Separable gaussian from `in` into `out` (through `tmp`); sigma in texels of these textures.
-  void Blur(const Tex& in, Tex& tmp, Tex& out, float sigma, CB& cb);
+            std::initializer_list<ID3D11ShaderResourceView*> srvs, const CB& cb) {
+    m_passes.Pass(rtvs, w, h, ps, srvs, &cb);
+  }
 
   ComPtr<ID3D11Device> m_device;
   ComPtr<ID3D11DeviceContext> m_ctx;
   ComPtr<IDCompositionDevice> m_dcomp;
-  ComPtr<ID3D11VertexShader> m_vs;
-  ComPtr<ID3D11PixelShader> m_psProject, m_psDiff, m_psGlow, m_psBlur, m_psFinal;
-  ComPtr<ID3D11Buffer> m_cb;
-  ComPtr<ID3D11SamplerState> m_sampler;
+  PassRunner m_passes;  // the full-screen VS, sampler, constant buffer and the blur
+  ComPtr<ID3D11PixelShader> m_psProject, m_psDiff, m_psGlow, m_psFinal;
 
   // Picture copy, FP16 linear, full mip chain. Allocated in multiples of 64 with the edges repeated into
   // the padding, so every mip level down to 1/64 lines up with the picture (odd sizes would shift each

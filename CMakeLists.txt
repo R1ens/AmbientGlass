@@ -31,7 +31,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # ---------------------------------------------------------------------------
-# Shaders: src/glow.hlsl -> ${CMAKE_BINARY_DIR}/gen/*.h (one header per entry point)
+# Shaders: *.hlsl -> ${CMAKE_BINARY_DIR}/gen/*.h (one header per entry point)
 # ---------------------------------------------------------------------------
 set(FXC_EXECUTABLE "" CACHE FILEPATH "Path to fxc.exe (HLSL compiler from the Windows SDK)")
 if(NOT FXC_EXECUTABLE)
@@ -57,34 +57,60 @@ if(NOT FXC_EXECUTABLE)
 endif()
 message(STATUS "fxc: ${FXC_EXECUTABLE}")
 
-set(SHADER_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/glow.hlsl")
 set(SHADER_GEN_DIR "${CMAKE_BINARY_DIR}/gen")
 file(MAKE_DIRECTORY "${SHADER_GEN_DIR}")
+set(SHARED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shared")
+# Every shader may #include the shared .hlsli files (fullscreen.hlsli: VSOut), so all of them rebuild on a change.
+file(GLOB SHARED_HLSLI CONFIGURE_DEPENDS "${SHARED_DIR}/*.hlsli")
 
-set(SHADER_HEADERS)
-# add_shader(<profile> <entry> <header>) -> gen/<header> with byte array g_<entry>
-function(add_shader profile entry header)
+# add_shader(<list var> <source.hlsl> <profile> <entry> <header>) -> gen/<header> with byte array g_<entry>,
+# appended to <list var> in the caller's scope (the DEPENDS of that app's shader target).
+function(add_shader list source profile entry header)
   set(out "${SHADER_GEN_DIR}/${header}")
   add_custom_command(
     OUTPUT "${out}"
-    COMMAND "${FXC_EXECUTABLE}" /nologo /T ${profile} /E ${entry} /O3 /Fh "${out}" /Vn g_${entry} "${SHADER_SRC}"
-    MAIN_DEPENDENCY "${SHADER_SRC}"
+    COMMAND "${FXC_EXECUTABLE}" /nologo /T ${profile} /E ${entry} /O3 /I "${SHARED_DIR}"
+            /Fh "${out}" /Vn g_${entry} "${source}"
+    MAIN_DEPENDENCY "${source}"
+    DEPENDS ${SHARED_HLSLI}
     COMMENT "fxc ${profile} ${entry} -> gen/${header}"
     VERBATIM)
-  set(SHADER_HEADERS ${SHADER_HEADERS} "${out}" PARENT_SCOPE)
+  set(${list} ${${list}} "${out}" PARENT_SCOPE)
 endfunction()
 
-add_shader(vs_5_0 VSMain    glow_vs.h)
-add_shader(ps_5_0 PSProject glow_ps_project.h)
-add_shader(ps_5_0 PSGlow    glow_ps_glow.h)
-add_shader(ps_5_0 PSBlur    glow_ps_blur.h)
-add_shader(ps_5_0 PSFinal   glow_ps_final.h)
-add_shader(ps_5_0 PSDiff    glow_ps_diff.h)
+# ---------------------------------------------------------------------------
+# shared_core: code any app in this repository can link (logging, ini settings, D3D11 passes and blur,
+# image loading), with the compile options every target here uses
+# ---------------------------------------------------------------------------
+set(SHARED_SHADERS)
+add_shader(SHARED_SHADERS "${SHARED_DIR}/blur.hlsl" vs_5_0 VSMain shared_vs.h)
+add_shader(SHARED_SHADERS "${SHARED_DIR}/blur.hlsl" ps_5_0 PSBlur shared_ps_blur.h)
+add_custom_target(shared_shaders DEPENDS ${SHARED_SHADERS} SOURCES "${SHARED_DIR}/blur.hlsl" ${SHARED_HLSLI})
 
-add_custom_target(shaders DEPENDS ${SHADER_HEADERS} SOURCES "${SHADER_SRC}")
+file(GLOB SHARED_SOURCES CONFIGURE_DEPENDS "${SHARED_DIR}/*.cpp")
+file(GLOB SHARED_HEADERS CONFIGURE_DEPENDS "${SHARED_DIR}/*.h")
+add_library(shared_core STATIC ${SHARED_SOURCES} ${SHARED_HEADERS})
+add_dependencies(shared_core shared_shaders)
+target_include_directories(shared_core PUBLIC "${SHARED_DIR}" "${SHADER_GEN_DIR}")
+target_compile_definitions(shared_core PUBLIC UNICODE _UNICODE NOMINMAX)
+target_compile_options(shared_core PUBLIC
+  "$<$<COMPILE_LANGUAGE:CXX>:/utf-8;/W4;/EHsc;/permissive-;/bigobj;/MP>")
+target_link_libraries(shared_core PUBLIC d3d11 dxgi windowscodecs shell32 user32 ole32)
 
 # ---------------------------------------------------------------------------
-# vlcambient_core: everything except main.cpp, plus Dear ImGui
+# VlcAmbient shaders: src/glow.hlsl
+# ---------------------------------------------------------------------------
+set(SHADER_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/glow.hlsl")
+set(GLOW_SHADERS)
+add_shader(GLOW_SHADERS "${SHADER_SRC}" ps_5_0 PSProject glow_ps_project.h)
+add_shader(GLOW_SHADERS "${SHADER_SRC}" ps_5_0 PSGlow    glow_ps_glow.h)
+add_shader(GLOW_SHADERS "${SHADER_SRC}" ps_5_0 PSFinal   glow_ps_final.h)
+add_shader(GLOW_SHADERS "${SHADER_SRC}" ps_5_0 PSDiff    glow_ps_diff.h)
+
+add_custom_target(shaders DEPENDS ${GLOW_SHADERS} SOURCES "${SHADER_SRC}")
+
+# ---------------------------------------------------------------------------
+# vlcambient_core: everything in src/ except main.cpp, plus Dear ImGui; on top of shared_core
 # ---------------------------------------------------------------------------
 file(GLOB CORE_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 list(REMOVE_ITEM CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
@@ -105,15 +131,11 @@ add_dependencies(vlcambient_core shaders)
 target_include_directories(vlcambient_core PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}/src"
   "${IMGUI_DIR}"
-  "${IMGUI_DIR}/backends"
-  "${SHADER_GEN_DIR}")
+  "${IMGUI_DIR}/backends")
 
-target_compile_definitions(vlcambient_core PUBLIC UNICODE _UNICODE NOMINMAX)
-target_compile_options(vlcambient_core PUBLIC
-  "$<$<COMPILE_LANGUAGE:CXX>:/utf-8;/W4;/EHsc;/permissive-;/bigobj;/MP>")
-
+# Definitions and compile options come from shared_core.
 target_link_libraries(vlcambient_core PUBLIC
-  d3d11 dxgi dcomp dwmapi windowsapp windowscodecs shell32 user32 ole32 advapi32)
+  shared_core dcomp dwmapi windowsapp advapi32)
 
 # ---------------------------------------------------------------------------
 # VlcAmbient.exe
@@ -137,10 +159,14 @@ set_target_properties(VlcAmbient PROPERTIES
 # ---------------------------------------------------------------------------
 enable_testing()
 
+# The single-header test framework (tests/test_framework.h), for any test executable in this repository.
+add_library(test_framework INTERFACE)
+target_include_directories(test_framework INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/tests")
+
 file(GLOB TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")
 if(TEST_SOURCES)
   add_executable(vlcambient_tests ${TEST_SOURCES})
-  target_link_libraries(vlcambient_tests PRIVATE vlcambient_core)
+  target_link_libraries(vlcambient_tests PRIVATE vlcambient_core test_framework)
   add_test(NAME unit COMMAND vlcambient_tests)
 else()
   message(STATUS "tests/*.cpp not found - vlcambient_tests target skipped")
@@ -163,3 +189,8 @@ if(PYTHON_EXECUTABLE AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/quality/check
 else()
   message(STATUS "python or tests/quality not found - quality test skipped")
 endif()
+
+# ---------------------------------------------------------------------------
+# AimpGlass (aimp/): the second program in this repository
+# ---------------------------------------------------------------------------
+add_subdirectory(aimp)

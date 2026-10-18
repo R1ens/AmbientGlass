@@ -5,7 +5,8 @@
 
 #include <string>
 
-// Every GPU texture and swap chain in the glow pipeline: linear scRGB with alpha.
+// Linear scRGB with alpha: the default for MakeTex and the format LoadPicture decodes to. VlcAmbient uses it
+// for every texture and swap chain of the glow pipeline.
 constexpr DXGI_FORMAT kGpuFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
 inline int RectW(const RECT& r) { return r.right - r.left; }

@@ -1,6 +1,8 @@
 #pragma once
 #include <string>
 
+#include "settings_ini.h"
+
 // All user settings: type, name, default, min, max.
 #define VA_SETTINGS(X)                      \
   X(bool, enabled,        1,    0,   1)     \
@@ -31,9 +33,7 @@
   X(bool, autostart,      0,    0,   1)
 
 struct Settings {
-#define VA_FIELD(t, n, d, lo, hi) t n = (t)(d);
-  VA_SETTINGS(VA_FIELD)
-#undef VA_FIELD
+  SETTINGS_STRUCT_BODY(VA_SETTINGS)
 
   void Clamp();
   bool operator==(const Settings&) const = default;

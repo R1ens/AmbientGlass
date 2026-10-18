@@ -1,3 +1,5 @@
+#include "fullscreen.hlsli"  // VSOut (shared/)
+
 Texture2D t0 : register(t0);
 Texture2D t1 : register(t1);
 Texture2D t2 : register(t2);
@@ -12,7 +14,6 @@ cbuffer CB : register(b0) {
   float4 glowB;     // glow: x = edge band depth, y = transition width, z = reach (all glow texels), w = fade start
   float4 glowC;     // glow: x = fade easing exponent, y = vibrance, zw = glow texture size
   float4 dirs;      // glow: top, right, bottom, left enabled (1/0)
-  float4 blur;      // blur: xy = texel step, z = sigma, w = radius in taps
   float4 fin;       // final: xy = output size px, z = dither amplitude, w = 1 when output must be opaque
   float4 adj;       // final: contrast, brightness, saturation, frame seed
   float4 holeRect;  // final: l, t, r, b (output px) left fully transparent: the picture itself
@@ -24,16 +25,6 @@ cbuffer CB : register(b0) {
   float4 glowInfo;  // final: xy = glow grid origin (output px), z = full-res zone width px, w = its max sigma px
   float4 temporal;  // project: x = dt ms, y = steady smoothing ms, z = scene-change fade ms, w = 1 to reset
 };
-
-struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
-
-VSOut VSMain(uint id : SV_VertexID) {
-  VSOut o;
-  float2 uv = float2((id << 1) & 2, id & 2);
-  o.uv = uv;
-  o.pos = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);
-  return o;
-}
 
 float3 LinToSrgb(float3 c) {
   float3 a = abs(c);
@@ -190,19 +181,6 @@ float4 PSGlow(VSOut i) : SV_Target {
   float enabled = vertical ? (d.y < 0 ? dirs.x : dirs.z) : (d.x > 0 ? dirs.y : dirs.w);
   if (enabled < 0.5) alpha = 0;
   return float4(c * alpha, alpha);
-}
-
-float4 PSBlur(VSOut i) : SV_Target {
-  float inv = -0.5 / (blur.z * blur.z);
-  float4 acc = t0.SampleLevel(sLin, i.uv, 0);
-  float wsum = 1;
-  int r = (int)blur.w;
-  for (int k = 1; k <= r; k++) {
-    float w = exp(k * k * inv);
-    acc += w * (t0.SampleLevel(sLin, i.uv + blur.xy * k, 0) + t0.SampleLevel(sLin, i.uv - blur.xy * k, 0));
-    wsum += 2 * w;
-  }
-  return acc / wsum;
 }
 
 // Interleaved gradient noise: even, pattern-free, cheap.

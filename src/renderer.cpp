@@ -9,17 +9,13 @@
 #include "log.h"
 
 // Shader bytecode, produced from src/glow.hlsl by fxc at build time.
-#include "glow_ps_blur.h"
 #include "glow_ps_diff.h"
 #include "glow_ps_final.h"
 #include "glow_ps_glow.h"
 #include "glow_ps_project.h"
-#include "glow_vs.h"
 
 namespace {
 
-constexpr float kBlurTexelsPerSigma = 5.f;   // glow resolution: ~5 px of blur per glow texel
-constexpr float kMaxBlurTaps = 64.f;         // per side, in glow texels
 constexpr float kTransitionTexels = 6.f;     // glow texels across the transition at least
 constexpr UINT kLumaMinRows = 480;           // luma grid: the smallest mip at least this tall
 constexpr float kDitherLsb = 1.5f / 255.f;   // triangular dither of up to 1.5 steps of 8 bits at 100%
@@ -45,7 +41,6 @@ struct alignas(16) Renderer::CB {
   float glowB[4];
   float glowC[4];
   float dirs[4];
-  float blur[4];
   float fin[4];
   float adj[4];
   float holeRect[4];
@@ -79,7 +74,10 @@ bool Renderer::Init(std::wstring& error, bool warp) {
     return false;
   }
 
-  hr = m_device->CreateVertexShader(g_VSMain, sizeof(g_VSMain), nullptr, &m_vs);
+  if (!m_passes.Init(m_device.Get(), m_ctx.Get(), sizeof(CB), error)) {
+    Log::Error("renderer: %s", ToUtf8(error).c_str());
+    return false;
+  }
   struct {
     const BYTE* code;
     size_t size;
@@ -87,7 +85,6 @@ bool Renderer::Init(std::wstring& error, bool warp) {
   } pixel[] = {{g_PSProject, sizeof(g_PSProject), &m_psProject},
                {g_PSDiff, sizeof(g_PSDiff), &m_psDiff},
                {g_PSGlow, sizeof(g_PSGlow), &m_psGlow},
-               {g_PSBlur, sizeof(g_PSBlur), &m_psBlur},
                {g_PSFinal, sizeof(g_PSFinal), &m_psFinal}};
   for (auto& p : pixel)
     if (SUCCEEDED(hr)) hr = m_device->CreatePixelShader(p.code, p.size, nullptr, p.ps->GetAddressOf());
@@ -97,89 +94,8 @@ bool Renderer::Init(std::wstring& error, bool warp) {
     return false;
   }
 
-  D3D11_BUFFER_DESC bd{};
-  bd.ByteWidth = sizeof(CB);
-  bd.Usage = D3D11_USAGE_DYNAMIC;
-  bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-  bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-  m_device->CreateBuffer(&bd, nullptr, &m_cb);
-
-  D3D11_SAMPLER_DESC sd{};
-  sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
-  sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-  sd.MaxLOD = D3D11_FLOAT32_MAX;
-  m_device->CreateSamplerState(&sd, &m_sampler);
-  if (!m_cb || !m_sampler) {
-    error = L"Renderer state creation failed";
-    Log::Error("renderer: %s", ToUtf8(error).c_str());
-    return false;
-  }
   Log::Info("renderer: %s device ready", warp ? "WARP" : "hardware");
   return true;
-}
-
-bool Renderer::MakeTex(Tex& t, UINT w, UINT h, UINT mips, DXGI_FORMAT format) {
-  t = Tex{};
-  D3D11_TEXTURE2D_DESC d{};
-  d.Width = w;
-  d.Height = h;
-  d.MipLevels = mips;
-  d.ArraySize = 1;
-  d.Format = format;
-  d.SampleDesc.Count = 1;
-  d.Usage = D3D11_USAGE_DEFAULT;
-  d.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-  d.MiscFlags = mips != 1 ? D3D11_RESOURCE_MISC_GENERATE_MIPS : 0;
-  HRESULT hr = m_device->CreateTexture2D(&d, nullptr, &t.tex);
-  if (SUCCEEDED(hr)) hr = m_device->CreateShaderResourceView(t.tex.Get(), nullptr, &t.srv);
-  if (SUCCEEDED(hr)) hr = m_device->CreateRenderTargetView(t.tex.Get(), nullptr, &t.rtv);
-  if (FAILED(hr)) {
-    Log::Error("renderer: cannot create a %ux%u texture: %s", w, h, Log::HrText(hr).c_str());
-    t = Tex{};
-    return false;
-  }
-  t.tex->GetDesc(&d);
-  t.w = w;
-  t.h = h;
-  t.mips = d.MipLevels;
-  return true;
-}
-
-void Renderer::Pass(ID3D11RenderTargetView* rtv, UINT w, UINT h, ID3D11PixelShader* ps,
-                    std::initializer_list<ID3D11ShaderResourceView*> srvList, const CB& cb) {
-  Pass({rtv}, w, h, ps, srvList, cb);
-}
-
-void Renderer::Pass(std::initializer_list<ID3D11RenderTargetView*> rtvList, UINT w, UINT h, ID3D11PixelShader* ps,
-                    std::initializer_list<ID3D11ShaderResourceView*> srvList, const CB& cb) {
-  D3D11_MAPPED_SUBRESOURCE m;
-  if (SUCCEEDED(m_ctx->Map(m_cb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) {
-    memcpy(m.pData, &cb, sizeof(CB));
-    m_ctx->Unmap(m_cb.Get(), 0);
-  }
-  D3D11_VIEWPORT vp{0, 0, (float)w, (float)h, 0, 1};
-  ID3D11RenderTargetView* rtvs[3] = {};
-  UINT nr = 0;
-  for (ID3D11RenderTargetView* v : rtvList)
-    if (nr < 3) rtvs[nr++] = v;
-  m_ctx->OMSetRenderTargets(nr, rtvs, nullptr);
-  m_ctx->RSSetViewports(1, &vp);
-  m_ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-  m_ctx->IASetInputLayout(nullptr);
-  m_ctx->VSSetShader(m_vs.Get(), nullptr, 0);
-  m_ctx->PSSetShader(ps, nullptr, 0);
-  m_ctx->PSSetConstantBuffers(0, 1, m_cb.GetAddressOf());
-  m_ctx->PSSetSamplers(0, 1, m_sampler.GetAddressOf());
-  ID3D11ShaderResourceView* srvs[5] = {};
-  UINT n = 0;
-  for (ID3D11ShaderResourceView* v : srvList)
-    if (n < 5) srvs[n++] = v;
-  m_ctx->PSSetShaderResources(0, 5, srvs);
-  m_ctx->Draw(3, 0);
-  ID3D11ShaderResourceView* none[5] = {};
-  m_ctx->PSSetShaderResources(0, 5, none);
-  ID3D11RenderTargetView* noRtv[3] = {};
-  m_ctx->OMSetRenderTargets(3, noRtv, nullptr);
 }
 
 bool Renderer::Ingest(ID3D11Texture2D* captured, const D3D11_BOX& box, bool wantLuma) {
@@ -375,7 +291,7 @@ void Renderer::RenderTo(ID3D11RenderTargetView* rtv, UINT ow, UINT oh, GlowTarge
   ID3D11ShaderResourceView* farGlow = t.raw.srv.Get();
   float sigma = g.sigmaPx / ds;
   if (sigma > 0.3f) {
-    Blur(t.raw, t.tmp, t.blur, sigma, cb);
+    m_passes.Blur(t.raw, t.tmp, t.blur, sigma);
     farGlow = t.blur.srv.Get();
   }
 
@@ -389,8 +305,8 @@ void Renderer::RenderTo(ID3D11RenderTargetView* rtv, UINT ow, UINT oh, GlowTarge
     cont[0] = cont[1] = cont[2] = t.cont.srv.Get();
     float s1 = sigma / 4, s2 = sigma / 2;
     if (s1 > 0.3f) {
-      Blur(t.cont, t.tmp, t.cont1, s1, cb);
-      Blur(t.cont1, t.tmp, t.cont2, std::sqrt(s2 * s2 - s1 * s1), cb);
+      m_passes.Blur(t.cont, t.tmp, t.cont1, s1);
+      m_passes.Blur(t.cont1, t.tmp, t.cont2, std::sqrt(s2 * s2 - s1 * s1));
       cont[1] = t.cont1.srv.Get();
       cont[2] = t.cont2.srv.Get();
     }
@@ -425,17 +341,6 @@ void Renderer::RenderTo(ID3D11RenderTargetView* rtv, UINT ow, UINT oh, GlowTarge
     cb.glowInfo[3] = ds;  // the picture's own blur never exceeds what a glow texel would add
   }
   Pass(rtv, ow, oh, m_psFinal.Get(), {cont[0], m_src.srv.Get(), farGlow, cont[1], cont[2]}, cb);
-}
-
-void Renderer::Blur(const Tex& in, Tex& tmp, Tex& out, float sigma, CB& cb) {
-  cb.blur[2] = sigma;
-  cb.blur[3] = std::min(std::ceil(sigma * 3.f), kMaxBlurTaps);
-  cb.blur[0] = 1.f / in.w;
-  cb.blur[1] = 0;
-  Pass(tmp.rtv.Get(), tmp.w, tmp.h, m_psBlur.Get(), {in.srv.Get()}, cb);
-  cb.blur[0] = 0;
-  cb.blur[1] = 1.f / in.h;
-  Pass(out.rtv.Get(), out.w, out.h, m_psBlur.Get(), {tmp.srv.Get()}, cb);
 }
 
 bool Renderer::ReadLuma(LumaGrid& out) {

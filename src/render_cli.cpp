@@ -2,7 +2,6 @@
 
 #include <windows.h>
 #include <d3d11.h>
-#include <wincodec.h>
 #include <wrl/client.h>
 #include <DirectXPackedVector.h>
 
@@ -18,8 +17,7 @@
 #include "log.h"
 #include "renderer.h"
 #include "settings.h"
-
-#pragma comment(lib, "windowscodecs.lib")
+#include "wic_image.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -38,12 +36,6 @@ struct Options {
   std::wstring prev;  // an earlier frame: the glow starts from it and steps toward the input
   int steps = 1;
   float crop[4] = {0.f, 0.f, 1.f, 1.f};
-};
-
-// The decoded picture as linear scRGB halves, alpha 1, ready for a kGpuFormat texture.
-struct Picture {
-  UINT w = 0, h = 0;
-  std::vector<uint16_t> rgba;
 };
 
 bool g_console = false;
@@ -189,79 +181,12 @@ bool ApplySet(Settings& s, const std::wstring& kv, std::string& err) {
   return false;
 }
 
-float SrgbToLinear(float c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); }
-float LinearToSrgb(float c) { return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.f / 2.4f) - 0.055f; }
-
 std::string Failed(const char* what, HRESULT hr) { return std::string(what) + ": " + Log::HrText(hr); }
 
-// Decodes any WIC-readable file to 16-bit integer RGBA (a plain rescale, no colour management), then
-// applies the sRGB EOTF: the texture holds linear scRGB like the capture frames the app ingests.
-bool LoadPicture(IWICImagingFactory* wic, const std::wstring& path, Picture& pic, std::string& err) {
-  ComPtr<IWICBitmapDecoder> decoder;
-  HRESULT hr = wic->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand,
-                                              &decoder);
-  if (FAILED(hr)) {
-    err = Failed(("cannot open " + ToUtf8(path)).c_str(), hr);
-    return false;
-  }
-  ComPtr<IWICBitmapFrameDecode> frame;
-  hr = decoder->GetFrame(0, &frame);
-  if (SUCCEEDED(hr)) hr = frame->GetSize(&pic.w, &pic.h);
-  ComPtr<IWICFormatConverter> conv;
-  if (SUCCEEDED(hr)) hr = wic->CreateFormatConverter(&conv);
-  if (SUCCEEDED(hr))
-    hr = conv->Initialize(frame.Get(), GUID_WICPixelFormat64bppRGBA, WICBitmapDitherTypeNone, nullptr, 0,
-                          WICBitmapPaletteTypeCustom);
-  std::vector<uint16_t> raw;
-  if (SUCCEEDED(hr)) {
-    raw.resize((size_t)pic.w * pic.h * 4);
-    hr = conv->CopyPixels(nullptr, pic.w * 8, (UINT)(raw.size() * sizeof(uint16_t)),
-                          reinterpret_cast<BYTE*>(raw.data()));
-  }
-  if (FAILED(hr)) {
-    err = Failed(("cannot decode " + ToUtf8(path)).c_str(), hr);
-    return false;
-  }
+bool LoadInput(IWICImagingFactory* wic, const std::wstring& path, Picture& pic, std::string& err) {
+  if (!LoadPicture(wic, path, pic, err)) return false;
   if (pic.w < 2 || pic.h < 2) {
     err = "the picture is too small";
-    return false;
-  }
-
-  using DirectX::PackedVector::XMConvertFloatToHalf;
-  pic.rgba.resize(raw.size());
-  const uint16_t one = XMConvertFloatToHalf(1.f);
-  for (size_t i = 0; i < raw.size(); i += 4) {
-    for (size_t c = 0; c < 3; c++) pic.rgba[i + c] = XMConvertFloatToHalf(SrgbToLinear((float)raw[i + c] / 65535.f));
-    pic.rgba[i + 3] = one;
-  }
-  return true;
-}
-
-bool SavePng(IWICImagingFactory* wic, const std::wstring& path, UINT w, UINT h, const std::vector<BYTE>& bgra,
-             std::string& err) {
-  ComPtr<IWICStream> stream;
-  HRESULT hr = wic->CreateStream(&stream);
-  if (SUCCEEDED(hr)) hr = stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE);
-  if (FAILED(hr)) {
-    err = Failed(("cannot create " + ToUtf8(path)).c_str(), hr);
-    return false;
-  }
-  ComPtr<IWICBitmapEncoder> encoder;
-  hr = wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
-  if (SUCCEEDED(hr)) hr = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
-  ComPtr<IWICBitmapFrameEncode> frame;
-  ComPtr<IPropertyBag2> props;
-  if (SUCCEEDED(hr)) hr = encoder->CreateNewFrame(&frame, &props);
-  if (SUCCEEDED(hr)) hr = frame->Initialize(props.Get());
-  if (SUCCEEDED(hr)) hr = frame->SetSize(w, h);
-  WICPixelFormatGUID fmt = GUID_WICPixelFormat32bppBGRA;
-  if (SUCCEEDED(hr)) hr = frame->SetPixelFormat(&fmt);
-  if (SUCCEEDED(hr) && fmt != GUID_WICPixelFormat32bppBGRA) hr = WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT;
-  if (SUCCEEDED(hr)) hr = frame->WritePixels(h, w * 4, (UINT)bgra.size(), const_cast<BYTE*>(bgra.data()));
-  if (SUCCEEDED(hr)) hr = frame->Commit();
-  if (SUCCEEDED(hr)) hr = encoder->Commit();
-  if (FAILED(hr)) {
-    err = Failed(("cannot write " + ToUtf8(path)).c_str(), hr);
     return false;
   }
   return true;
@@ -300,7 +225,7 @@ int Render(const Options& o) {
 
   std::string err;
   Picture pic;
-  if (!LoadPicture(wic.Get(), o.in, pic, err)) return Fail(err);
+  if (!LoadInput(wic.Get(), o.in, pic, err)) return Fail(err);
 
   Settings s;
   if (!o.settings.empty() && !LoadSettings(o.settings, s)) return Fail("cannot read settings " + ToUtf8(o.settings));
@@ -360,7 +285,7 @@ int Render(const Options& o) {
   const float steady = (float)s.smoothingMs, cut = (float)s.cutFadeMs;
   if (!o.prev.empty()) {
     Picture before;
-    if (!LoadPicture(wic.Get(), o.prev, before, err)) return Fail(err);
+    if (!LoadInput(wic.Get(), o.prev, before, err)) return Fail(err);
     if (before.w != pic.w || before.h != pic.h) return Fail("--prev must be the same size as the input");
     if (std::string e = ingest(before); !e.empty()) return Fail(e);
     renderer.UpdateProjector(o.crop, 0.f, steady, cut);
