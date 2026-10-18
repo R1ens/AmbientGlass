@@ -91,8 +91,8 @@ struct Model {
   float time = 0;  // seconds since start, drives the background animation
 };
 
-// Dark text on a light background: the light theme, unless the black-and-silver filter is past its middle
-// (the background is black there, so the interface takes the dark look).
-inline bool LightLook(const Model& m) { return m.theme == Theme::Light && m.settings.mono < 50; }
+// Dark text on a light background: the light theme (in black and white too: there it turns into a negative, a
+// white background with black light).
+inline bool LightLook(const Model& m) { return m.theme == Theme::Light; }
 
 }  // namespace glass

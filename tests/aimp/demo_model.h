@@ -59,7 +59,7 @@ inline glass::Model MakeModel(int variant = 0) {
   m.repeat = Repeat::All;
   {
     auto cover = MakeCover(512, variant);
-    if (variant == 6) {  // a black-and-white cover
+    if (variant == 6 || variant == 11 || variant == 12) {  // a black-and-white cover
       for (size_t i = 0; i + 3 < cover->rgba.size(); i += 4) {
         uint8_t g = (uint8_t)((cover->rgba[i] * 54 + cover->rgba[i + 1] * 183 + cover->rgba[i + 2] * 19) >> 8);
         cover->rgba[i] = cover->rgba[i + 1] = cover->rgba[i + 2] = g;
@@ -104,10 +104,12 @@ inline glass::Model MakeModel(int variant = 0) {
   ApplyQuery(m);
   m.aimpFading = true;  // AIMP's own setting, shown in quick settings
   m.quickSettingsOpen = variant == 4;
-  m.theme = variant == 5 ? Theme::Light : Theme::Dark;
-  if (variant == 7 || variant == 9) m.settings.frost = 0;   // clear glass
+  m.theme = variant == 5 || variant == 10 ? Theme::Light : Theme::Dark;
+  if (variant == 10) m.settings.mono = 100;  // light theme in black and white: the negative
+  if (variant == 7 || variant == 9 || variant == 11 || variant == 12) m.settings.frost = 0;   // clear glass
   if (variant == 8 || variant == 9) m.settings.mono = 100;  // black and silver
   m.bpm = 124, m.loud = 0.8f;
+  if (variant == 12) m.time = 3600;  // an hour after the window opened
   return m;
 }
 

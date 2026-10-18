@@ -15,11 +15,12 @@ namespace {
 
 constexpr UINT kW = 960, kH = 600;
 
-rt::Image Render(const glass::Model& m, bool ui, bool background = true, float rays = 1.f) {
+rt::Image Render(const glass::Model& m, bool ui, bool background = true, float rays = 1.f, bool coverGlow = true) {
   rt::Image img;
   img.w = kW, img.h = kH;
   glass::SceneOptions o;
   o.background = background;
+  o.coverGlow = coverGlow;
   o.rays = rays;
   o.dither = 0;  // exact comparisons
   if (rt::Warp()) rt::Warp()->Render(m, kW, kH, 1.f, o, ui, img.bgra);
@@ -49,7 +50,7 @@ TEST(render_warp_available) { CHECK(rt::Warp() != nullptr); }
 TEST(render_background_off_is_flat_dark) {
   if (!rt::Warp()) return;
   glass::Model m = demo::MakeModel(0);
-  rt::Image img = Render(m, false, false);
+  rt::Image img = Render(m, false, false, 1.f, false);  // the cover's own glow is a separate switch
   glass::Layout L = glass::ComputeLayout(kW, kH);
   // The gaps show only the base colour (10, 10, 14) darkened by the vignette and panel shadows.
   CHECK(GapLuma(img, L) < 14.f);
@@ -168,21 +169,87 @@ TEST(render_menu_is_drawn_inside_the_window_without_dimming_it) {
   CHECK(diff(glass::Rc{0, 0, 200, 200}) < 0.5);      // the rest of the window keeps its brightness
 }
 
-TEST(render_light_theme_in_black_and_silver_is_dark) {
+TEST(render_pattern_keeps_its_look_over_hours) {
+  if (!rt::Warp()) return;
+  // How fine the background is: how many light threads a circle around the cover crosses (local brightness
+  // peaks along it), averaged over a few radii and moments. Seen through clear glass, so nothing blurs it.
+  auto threads = [](float time) {
+    glass::Layout L = glass::ComputeLayout(kW, kH);
+    double total = 0;
+    int runs = 0;
+    for (float dt : {0.f, 1.f, 2.f}) {
+      glass::Model m = demo::MakeModel(0);
+      m.time = time + dt;
+      m.pulse = m.bass = m.high = 0;
+      m.settings.frost = 0;
+      rt::Image img = Render(m, false);
+      for (float k : {0.75f, 0.95f, 1.15f}) {
+        const float r = L.cover.W() * k;
+        std::vector<double> ring;
+        for (int i = 0; i < 1440; i++) {
+          float a = i * 6.2831853f / 1440;
+          int x = (int)(L.cover.Cx() + r * std::cos(a)), y = (int)(L.cover.Cy() + r * std::sin(a));
+          if (x >= 0 && y >= 0 && x < (int)kW && y < (int)kH) ring.push_back(img.Luma((UINT)x, (UINT)y));
+        }
+        int peaks = 0;
+        for (size_t i = 2; i + 2 < ring.size(); i++)
+          if (ring[i] > ring[i - 2] + 1.5 && ring[i] > ring[i + 2] + 1.5 && ring[i] >= ring[i - 1] && ring[i] >= ring[i + 1]) peaks++;
+        total += peaks, runs++;
+      }
+    }
+    return total / runs;
+  };
+  const double start = threads(12.5f), hour = threads(3600.f), long_ = threads(36000.f);
+  std::printf("  threads around the cover: %.1f at 12 s, %.1f after an hour, %.1f after 10 hours\n", start, hour, long_);
+  CHECK(hour < start * 1.4 && hour > start * 0.7);
+  CHECK(long_ < start * 1.4 && long_ > start * 0.7);
+}
+
+TEST(render_cover_glow_lights_the_card_around_the_cover) {
+  if (!rt::Warp()) return;
+  glass::Model m = demo::MakeModel(0);
+  glass::SceneOptions on, off;
+  on.dither = off.dither = 0;
+  off.coverGlow = false;
+  rt::Image a, b;
+  a.w = b.w = kW, a.h = b.h = kH;
+  rt::Warp()->Render(m, kW, kH, 1.f, on, false, a.bgra);
+  rt::Warp()->Render(m, kW, kH, 1.f, off, false, b.bgra);
+  glass::Layout L = glass::ComputeLayout(kW, kH);
+  // A ring around the cover, inside the card: where the glow should show.
+  double d = 0, peak = 0;
+  int n = 0;
+  for (UINT y = (UINT)L.card.t + 4; y < (UINT)L.card.b - 4; y += 2)
+    for (UINT x = (UINT)L.card.l + 4; x < (UINT)L.info.l; x += 2) {
+      if (L.cover.Contains((float)x, (float)y)) continue;
+      double v = a.Luma(x, y) - b.Luma(x, y);
+      d += v, n++, peak = std::max(peak, v);
+    }
+  std::printf("  cover glow around the cover: +%.1f luma on average, +%.1f at most\n", d / n, peak);
+  CHECK(d / n > 12);  // a halo you can see, not a hint
+}
+
+TEST(render_light_theme_in_black_and_white_is_a_negative) {
   if (!rt::Warp()) return;
   glass::Model m = demo::MakeModel(5);  // light theme
-  rt::Image light = Render(m, false);
   m.settings.mono = 100;
-  rt::Image mono = Render(m, false);
-  auto mean = [](const rt::Image& img) {
-    double s = 0;
-    int n = 0;
-    for (UINT y = 0; y < kH; y += 4)
-      for (UINT x = 0; x < kW; x += 4) s += img.Luma(x, y), n++;
-    return s / n;
-  };
-  CHECK(mean(light) > 150);
-  CHECK(mean(mono) < 60);  // black background: the interface's light text stays readable
+  m.settings.frost = 0;  // clear glass: the background shows everywhere
+  rt::Image img = Render(m, false);
+  // White background, the light drawn in black, no colour.
+  std::vector<double> luma;
+  double chroma = 0;
+  for (UINT y = 0; y < kH; y += 4)
+    for (UINT x = 0; x < kW; x += 4) {
+      luma.push_back(img.Luma(x, y));
+      const uint8_t* p = &img.bgra[((size_t)y * kW + x) * 4];
+      chroma += std::max({p[0], p[1], p[2]}) - std::min({p[0], p[1], p[2]});
+    }
+  std::sort(luma.begin(), luma.end());
+  const double median = luma[luma.size() / 2], dark = luma[luma.size() / 50];
+  std::printf("  light negative: median luma %.0f, darkest 2%% %.0f\n", median, dark);
+  CHECK(median > 170);
+  CHECK(dark < median - 60);  // the light shows as dark marks
+  CHECK(chroma / luma.size() < 6);
 }
 
 TEST(render_glass_stays_dark) {

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <map>
 #include <string>
+#include <tuple>
 
 #include "d3d_helpers.h"
 #include "layout.h"
@@ -44,6 +45,13 @@ class UiPainter {
     }
   };
   IDWriteTextFormat* Format(float size, DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL, bool icon = false);
+  // A text layout for this frame, reused from earlier frames when nothing about it changed: building layouts and
+  // gradient stops anew every frame cost most of the frame at high refresh rates.
+  IDWriteTextLayout* TextLayout(const std::wstring& s, float w, float h, float size, DWRITE_FONT_WEIGHT weight,
+                                DWRITE_TEXT_ALIGNMENT align, bool wrap, float spacing, bool icon);
+  ID2D1GradientStopCollection* Stops(D2D1_COLOR_F a, D2D1_COLOR_F b);
+  // A cover picture cropped to a square and filled into a rounded rectangle (no layer, no mask).
+  void DrawCover(ID2D1Bitmap1* bmp, const Rc& r, float radius);
   void Text(const std::wstring& s, const Rc& r, float size, D2D1_COLOR_F c,
             DWRITE_FONT_WEIGHT w = DWRITE_FONT_WEIGHT_NORMAL,
             DWRITE_TEXT_ALIGNMENT align = DWRITE_TEXT_ALIGNMENT_LEADING, bool wrap = false, float spacing = 0);
@@ -71,6 +79,21 @@ class UiPainter {
   ComPtr<IDWriteFactory> m_dw;
   ComPtr<ID2D1SolidColorBrush> m_solid;
   std::map<Font, ComPtr<IDWriteTextFormat>> m_formats;
+  std::map<Font, ComPtr<IDWriteInlineObject>> m_ellipsis;
+  // Cached per frame use; entries not used for a while are dropped.
+  using TextKey = std::tuple<std::wstring, float, float, float, int, int, bool, float, bool>;
+  struct CachedText {
+    ComPtr<IDWriteTextLayout> layout;
+    uint64_t used = 0;
+  };
+  std::map<TextKey, CachedText> m_layouts;
+  using StopsKey = std::tuple<float, float, float, float, float, float, float, float>;
+  struct CachedStops {
+    ComPtr<ID2D1GradientStopCollection> stops;
+    uint64_t used = 0;
+  };
+  std::map<StopsKey, CachedStops> m_stops;
+  uint64_t m_frame = 0;
   std::wstring m_textFamily, m_displayFamily, m_iconFamily;
   ID3D11Texture2D* m_targetTex = nullptr;
   ComPtr<ID2D1Bitmap1> m_target;

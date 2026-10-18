@@ -4,6 +4,7 @@
 
 #include <cstring>
 
+#include "gpu_timer.h"
 #include "layout.h"
 #include "log.h"
 #include "ui_painter.h"
@@ -77,6 +78,66 @@ bool Offscreen::Render(const Model& m, UINT w, UINT h, float scale, const SceneO
     std::memcpy(&bgra[(size_t)y * w * 4], (const uint8_t*)map.pData + (size_t)y * map.RowPitch, (size_t)w * 4);
   m_ctx->Unmap(staging.Get(), 0);
   return true;
+}
+
+std::wstring Offscreen::Bench(const Model& model, UINT w, UINT h, float scale, int frames) {
+  D3D11_TEXTURE2D_DESC d{};
+  d.Width = w, d.Height = h, d.MipLevels = 1, d.ArraySize = 1;
+  d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+  d.SampleDesc.Count = 1;
+  d.Usage = D3D11_USAGE_DEFAULT;
+  d.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+  ComPtr<ID3D11Texture2D> tex;
+  ComPtr<ID3D11RenderTargetView> rtv;
+  GpuTimer timer;
+  if (FAILED(m_device->CreateTexture2D(&d, nullptr, &tex)) ||
+      FAILED(m_device->CreateRenderTargetView(tex.Get(), nullptr, &rtv)) || !timer.Init(m_device.Get(), m_ctx.Get()))
+    return L"bench: setup failed";
+  Layout L = ComputeLayout(w / scale, h / scale);
+  SceneOptions o;
+  o.frost = model.settings.frost / 100.f;
+  o.mono = model.settings.mono / 100.f;
+  UiState s;
+  m_scene.SetTimer(&timer);
+  std::vector<std::pair<std::string, double>> steps, sum;
+  double cpu = 0;
+  int counted = 0;
+  LARGE_INTEGER f, t0, t1;
+  QueryPerformanceFrequency(&f);
+  Model m = model;
+  for (int i = 0; i < frames + 10; i++) {
+    m.time = model.time + i / 240.f;
+    QueryPerformanceCounter(&t0);
+    timer.Begin();
+    timer.Mark("start");
+    m_scene.Render(rtv.Get(), w, h, scale, m, L, o);
+    m_painter->Paint(tex.Get(), scale, m, L, s);
+    timer.Mark("interface (Direct2D)");
+    QueryPerformanceCounter(&t1);
+    if (!timer.End(steps) || i < 10) continue;  // the first frames warm up caches and shaders
+    cpu += (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / f.QuadPart;
+    if (sum.empty()) sum = steps;
+    else
+      for (size_t k = 0; k < sum.size() && k < steps.size(); k++) sum[k].second += steps[k].second;
+    counted++;
+  }
+  m_scene.SetTimer(nullptr);
+  m_painter->ReleaseTarget();
+  if (!counted) return L"bench: no reliable frames";
+  wchar_t line[160];
+  std::wstring out;
+  double total = 0;
+  swprintf(line, 160, L"%ux%u, %d frames, average per frame:\n", w, h, counted);
+  out += line;
+  for (auto& st : sum) {
+    swprintf(line, 160, L"  %-24hs %7.3f ms\n", st.first.c_str(), st.second / counted);
+    out += line;
+    total += st.second / counted;
+  }
+  swprintf(line, 160, L"  %-24ls %7.3f ms  (%.0f%% of a 240 Hz frame)\n  CPU to issue a frame      %7.3f ms\n",
+           L"GPU total", total, total / (1000.0 / 240) * 100, cpu / counted);
+  out += line;
+  return out;
 }
 
 bool Offscreen::SavePng(const std::wstring& path, UINT w, UINT h, const std::vector<uint8_t>& bgra, std::string& err) {

@@ -93,16 +93,69 @@ ID2D1SolidColorBrush* UiPainter::Solid(D2D1_COLOR_F c) {
   return m_solid.Get();
 }
 
+ID2D1GradientStopCollection* UiPainter::Stops(D2D1_COLOR_F a, D2D1_COLOR_F b) {
+  StopsKey key{a.r, a.g, a.b, a.a, b.r, b.g, b.b, b.a};
+  auto it = m_stops.find(key);
+  if (it == m_stops.end()) {
+    D2D1_GRADIENT_STOP stops[2] = {{0.f, a}, {1.f, b}};
+    CachedStops c;
+    if (FAILED(m_dc->CreateGradientStopCollection(stops, 2, &c.stops))) return nullptr;
+    it = m_stops.emplace(key, std::move(c)).first;
+  }
+  it->second.used = m_frame;
+  return it->second.stops.Get();
+}
+
 ComPtr<ID2D1LinearGradientBrush> UiPainter::Gradient(const Rc& r, D2D1_COLOR_F a, D2D1_COLOR_F b, bool vertical) {
-  D2D1_GRADIENT_STOP stops[2] = {{0.f, a}, {1.f, b}};
-  ComPtr<ID2D1GradientStopCollection> coll;
   ComPtr<ID2D1LinearGradientBrush> br;
-  if (SUCCEEDED(m_dc->CreateGradientStopCollection(stops, 2, &coll)))
+  if (ID2D1GradientStopCollection* coll = Stops(a, b))
     m_dc->CreateLinearGradientBrush(
         D2D1::LinearGradientBrushProperties(D2D1::Point2F(r.l, r.t), vertical ? D2D1::Point2F(r.l, r.b)
                                                                                : D2D1::Point2F(r.r, r.t)),
-        coll.Get(), &br);
+        coll, &br);
   return br;
+}
+
+IDWriteTextLayout* UiPainter::TextLayout(const std::wstring& s, float w, float h, float size, DWRITE_FONT_WEIGHT weight,
+                                         DWRITE_TEXT_ALIGNMENT align, bool wrap, float spacing, bool icon) {
+  TextKey key{s, w, h, size, (int)weight, (int)align, wrap, spacing, icon};
+  auto it = m_layouts.find(key);
+  if (it == m_layouts.end()) {
+    IDWriteTextFormat* f = Format(size, weight, icon);
+    if (!f) return nullptr;
+    CachedText c;
+    if (FAILED(m_dw->CreateTextLayout(s.c_str(), (UINT32)s.size(), f, w, h, &c.layout))) return nullptr;
+    c.layout->SetTextAlignment(align);
+    c.layout->SetWordWrapping(wrap ? DWRITE_WORD_WRAPPING_WRAP : DWRITE_WORD_WRAPPING_NO_WRAP);
+    if (!icon) {
+      Font fk{size, weight, false};
+      ComPtr<IDWriteInlineObject>& ellipsis = m_ellipsis[fk];
+      if (!ellipsis) m_dw->CreateEllipsisTrimmingSign(f, &ellipsis);
+      DWRITE_TRIMMING trim{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+      if (ellipsis) c.layout->SetTrimming(&trim, ellipsis.Get());
+    }
+    if (spacing != 0) {
+      ComPtr<IDWriteTextLayout1> l1;
+      if (SUCCEEDED(c.layout.As(&l1))) l1->SetCharacterSpacing(0, spacing, 0, DWRITE_TEXT_RANGE{0, (UINT32)s.size()});
+    }
+    it = m_layouts.emplace(std::move(key), std::move(c)).first;
+  }
+  it->second.used = m_frame;
+  return it->second.layout.Get();
+}
+
+void UiPainter::DrawCover(ID2D1Bitmap1* bmp, const Rc& r, float radius) {
+  D2D1_SIZE_F bs = bmp->GetSize();
+  // Cover-fit: crop the longer side.
+  const float side = std::min(bs.width, bs.height), k = r.W() / side;
+  const float sx = (bs.width - side) / 2, sy = (bs.height - side) / 2;
+  ComPtr<ID2D1BitmapBrush1> br;
+  if (FAILED(m_dc->CreateBitmapBrush(bmp, D2D1::BitmapBrushProperties1(D2D1_EXTEND_MODE_CLAMP, D2D1_EXTEND_MODE_CLAMP,
+                                                                       D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC),
+                                     &br)))
+    return;
+  br->SetTransform(D2D1::Matrix3x2F::Scale(k, k) * D2D1::Matrix3x2F::Translation(r.l - sx * k, r.t - sy * k));
+  m_dc->FillRoundedRectangle(D2D1::RoundedRect(Rf(r), radius, radius), br.Get());
 }
 
 void UiPainter::RoundFill(const Rc& r, float rad, ID2D1Brush* b) {
@@ -116,27 +169,15 @@ void UiPainter::RoundStroke(const Rc& r, float rad, D2D1_COLOR_F c, float w) {
 void UiPainter::Text(const std::wstring& s, const Rc& r, float size, D2D1_COLOR_F c, DWRITE_FONT_WEIGHT w,
                      DWRITE_TEXT_ALIGNMENT align, bool wrap, float spacing) {
   if (s.empty() || !r.Valid()) return;
-  IDWriteTextFormat* f = Format(size, w);
-  if (!f) return;
-  ComPtr<IDWriteTextLayout> lay;
-  if (FAILED(m_dw->CreateTextLayout(s.c_str(), (UINT32)s.size(), f, r.W(), r.H(), &lay))) return;
-  lay->SetTextAlignment(align);
-  lay->SetWordWrapping(wrap ? DWRITE_WORD_WRAPPING_WRAP : DWRITE_WORD_WRAPPING_NO_WRAP);
-  DWRITE_TRIMMING trim{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
-  ComPtr<IDWriteInlineObject> ellipsis;
-  if (SUCCEEDED(m_dw->CreateEllipsisTrimmingSign(f, &ellipsis))) lay->SetTrimming(&trim, ellipsis.Get());
-  if (spacing != 0) {
-    ComPtr<IDWriteTextLayout1> l1;
-    if (SUCCEEDED(lay.As(&l1))) l1->SetCharacterSpacing(0, spacing, 0, DWRITE_TEXT_RANGE{0, (UINT32)s.size()});
-  }
-  m_dc->DrawTextLayout(D2D1::Point2F(r.l, r.t), lay.Get(), Solid(c), D2D1_DRAW_TEXT_OPTIONS_CLIP);
+  if (IDWriteTextLayout* lay = TextLayout(s, r.W(), r.H(), size, w, align, wrap, spacing, false))
+    m_dc->DrawTextLayout(D2D1::Point2F(r.l, r.t), lay, Solid(c), D2D1_DRAW_TEXT_OPTIONS_CLIP);
 }
 
 void UiPainter::Icon(wchar_t glyph, const Rc& r, float size, D2D1_COLOR_F c) {
-  IDWriteTextFormat* f = Format(size, DWRITE_FONT_WEIGHT_NORMAL, true);
-  if (!f) return;
-  f->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-  m_dc->DrawText(&glyph, 1, f, Rf(r), Solid(c));
+  if (!r.Valid()) return;
+  if (IDWriteTextLayout* lay = TextLayout(std::wstring(1, glyph), r.W(), r.H(), size, DWRITE_FONT_WEIGHT_NORMAL,
+                                          DWRITE_TEXT_ALIGNMENT_CENTER, false, 0, true))
+    m_dc->DrawTextLayout(D2D1::Point2F(r.l, r.t), lay, Solid(c));
 }
 
 void UiPainter::CircleButton(const Rc& r, wchar_t glyph, float iconSize, bool hover, bool active, bool primary) {
@@ -209,6 +250,12 @@ bool UiPainter::Begin(ID3D11Texture2D* target, float scale, const Model& m) {
   m_text = m_light ? Hex(0x1A1A22) : Hex(0xF2F2F5);
   m_dim = m_light ? Hex(0x1A1A22, 0.55f) : Hex(0xF2F2F5, 0.55f);
   m_time = m.time;
+
+  // Drop cached layouts and gradients nothing has drawn for a while (old titles, finished colour fades).
+  if (++m_frame % 240 == 0) {
+    for (auto it = m_layouts.begin(); it != m_layouts.end();) it = m_frame - it->second.used > 480 ? m_layouts.erase(it) : std::next(it);
+    for (auto it = m_stops.begin(); it != m_stops.end();) it = m_frame - it->second.used > 480 ? m_stops.erase(it) : std::next(it);
+  }
 
   m_dc->BeginDraw();
   m_dc->SetTransform(D2D1::Matrix3x2F::Identity());
@@ -344,17 +391,10 @@ void UiPainter::Card(const Model& m, const Layout& L, const UiState& s) {
   ComPtr<ID2D1RoundedRectangleGeometry> clip;
   m_factory->CreateRoundedRectangleGeometry(D2D1::RoundedRect(Rf(cv), 24, 24), &clip);
   if (ID2D1Bitmap1* bmp = CoverBitmap(m.cover.get())) {
-    m_dc->PushLayer(D2D1::LayerParameters1(D2D1::InfiniteRect(), clip.Get()), nullptr);
-    D2D1_SIZE_F bs = bmp->GetSize();
-    // Cover-fit: crop the longer side.
-    float side = std::min(bs.width, bs.height);
-    D2D1_RECT_F src = D2D1::RectF((bs.width - side) / 2, (bs.height - side) / 2, (bs.width + side) / 2,
-                                  (bs.height + side) / 2);
-    m_dc->DrawBitmap(bmp, Rf(cv), 1, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, &src);
+    DrawCover(bmp, cv, 24);
     // A soft sheen from the top that fades out smoothly by the middle (no visible edge).
     auto shine = Gradient(Rc{cv.l, cv.t, cv.r, cv.t + cv.H() * 0.6f}, C(1, 1, 1, 0.12f), C(1, 1, 1, 0), true);
-    m_dc->FillRectangle(Rf(cv), shine.Get());
-    m_dc->PopLayer();
+    m_dc->FillGeometry(clip.Get(), shine.Get());
   } else {
     auto g = Gradient(cv, WithA(m_a0, 0.85f), WithA(m_a2, 0.65f));
     m_dc->FillGeometry(clip.Get(), g.Get());
@@ -526,13 +566,11 @@ void UiPainter::List(const Model& m, const Layout& L, const UiState& s) {
   const bool chooser = m.nav == Nav::Playlists && m.playlists.size() > 1;
   m_listTitleR = 0;
   float titleW = 0;
-  if (IDWriteTextFormat* f = Format(12, DWRITE_FONT_WEIGHT_BOLD)) {
-    ComPtr<IDWriteTextLayout> lay;
-    if (SUCCEEDED(m_dw->CreateTextLayout(title.c_str(), (UINT32)title.size(), f, tr.W(), tr.H(), &lay))) {
-      DWRITE_TEXT_METRICS tm{};
-      lay->GetMetrics(&tm);
-      titleW = std::min(tm.width + 0.6f * title.size(), tr.W() * 0.6f);  // + letter spacing
-    }
+  if (IDWriteTextLayout* lay = TextLayout(title, tr.W(), tr.H(), 12, DWRITE_FONT_WEIGHT_BOLD,
+                                          DWRITE_TEXT_ALIGNMENT_LEADING, false, 0, false)) {
+    DWRITE_TEXT_METRICS tm{};
+    lay->GetMetrics(&tm);
+    titleW = std::min(tm.width + 0.6f * title.size(), tr.W() * 0.6f);  // + letter spacing
   }
   if (chooser) {
     // The title is a button: a pill on hover and a chevron after it.
@@ -658,12 +696,7 @@ void UiPainter::Bottom(const Model& m, const Layout& L, const UiState& s) {
   ComPtr<ID2D1RoundedRectangleGeometry> clip;
   m_factory->CreateRoundedRectangleGeometry(D2D1::RoundedRect(Rf(L.miniCover), 10, 10), &clip);
   if (ID2D1Bitmap1* bmp = CoverBitmap(m.cover.get())) {
-    m_dc->PushLayer(D2D1::LayerParameters1(D2D1::InfiniteRect(), clip.Get()), nullptr);
-    D2D1_SIZE_F bs = bmp->GetSize();
-    float side = std::min(bs.width, bs.height);
-    D2D1_RECT_F src = D2D1::RectF((bs.width - side) / 2, (bs.height - side) / 2, (bs.width + side) / 2, (bs.height + side) / 2);
-    m_dc->DrawBitmap(bmp, Rf(L.miniCover), 1, D2D1_INTERPOLATION_MODE_HIGH_QUALITY_CUBIC, &src);
-    m_dc->PopLayer();
+    DrawCover(bmp, L.miniCover, 10);
   } else {
     auto g = Gradient(L.miniCover, m_a0, m_a2);
     m_dc->FillGeometry(clip.Get(), g.Get());

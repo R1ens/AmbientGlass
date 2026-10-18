@@ -13,6 +13,8 @@
 
 namespace glass {
 
+class GpuTimer;
+
 struct SceneOptions {
   bool background = true;   // ribbons on; off = plain dark background
   bool coverGlow = true;
@@ -35,6 +37,8 @@ class GpuScene {
   // its text reads. Uses the background Render() made for this frame.
   void RenderOverlay(ID3D11RenderTargetView* rtv, UINT w, UINT h, float scale, const Model& m, const Layout& L,
                      const SceneOptions& o, const Rc& panel, float veil, float radius);
+  // Marks each pass on `timer` while set (measuring only).
+  void SetTimer(GpuTimer* timer) { m_timer = timer; }
 
  private:
   bool Ensure(UINT w, UINT h);
@@ -50,6 +54,7 @@ class GpuScene {
   ComPtr<ID3D11ShaderResourceView> m_coverSrv;
   uint64_t m_coverId = ~0ull;
   UINT m_w = 0, m_h = 0;
+  GpuTimer* m_timer = nullptr;
 };
 
 }  // namespace glass

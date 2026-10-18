@@ -29,6 +29,7 @@ int RenderDemo(const std::wstring& dir, bool warp) {
     float scale;
     bool ui;
     bool menu = false;
+    bool glow = true;
   } shots[] = {
       {L"playing", 0, 1600, 1000, 1.f, true},   {L"background_only", 0, 1600, 1000, 1.f, false},
       {L"long_title", 1, 1280, 800, 1.f, true}, {L"liked", 2, 1440, 900, 1.f, true},
@@ -37,11 +38,14 @@ int RenderDemo(const std::wstring& dir, bool warp) {
       {L"hidpi_150", 0, 2400, 1500, 1.5f, true},
       {L"clear_glass", 7, 1600, 1000, 1.f, true}, {L"mono", 8, 1600, 1000, 1.f, true},
       {L"mono_clear", 9, 1600, 1000, 1.f, true}, {L"menu", 0, 1600, 1000, 1.f, true, true},
+      {L"no_cover_glow", 0, 1600, 1000, 1.f, true, false, false}, {L"light_mono", 10, 1600, 1000, 1.f, true},
+      {L"grey_clear", 11, 1600, 1000, 1.f, true}, {L"grey_clear_hour", 12, 1600, 1000, 1.f, true},
   };
   CreateDirectoryW(dir.c_str(), nullptr);
   for (const Shot& s : shots) {
     glass::Model m = demo::MakeModel(s.variant);
     glass::SceneOptions o;
+    o.coverGlow = s.glow;
     std::vector<uint8_t> px;
     glass::UiState st = s.menu ? demo::MoreMenuOpen(s.w, s.h, s.scale) : glass::UiState{};
     if (!off.Render(m, s.w, s.h, s.scale, o, s.ui, px, &st)) {
@@ -117,6 +121,19 @@ int Golden(const std::wstring& dir, bool update) {
 int wmain(int argc, wchar_t** argv) {
   if (argc >= 3 && std::wstring(argv[1]) == L"--render")
     return RenderDemo(argv[2], argc >= 4 && std::wstring(argv[3]) == L"--warp");
+  if (argc >= 2 && std::wstring(argv[1]) == L"--bench") {
+    // --bench [W H]: GPU time of each pass on the real graphics card.
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    glass::Offscreen off;
+    std::wstring err;
+    if (!off.Init(false, err)) {
+      std::wprintf(L"init failed: %ls\n", err.c_str());
+      return 2;
+    }
+    UINT w = argc >= 4 ? (UINT)_wtoi(argv[2]) : 1600, h = argc >= 4 ? (UINT)_wtoi(argv[3]) : 1000;
+    std::wprintf(L"%ls", off.Bench(demo::MakeModel(0), w, h, 1.f, 600).c_str());
+    return 0;
+  }
   if (argc >= 3 && std::wstring(argv[1]) == L"--golden")
     return Golden(argv[2], argc >= 4 && std::wstring(argv[3]) == L"--update");
   return RUN_ALL_TESTS();

@@ -25,6 +25,9 @@ class Offscreen {
   bool Render(const Model& m, UINT w, UINT h, float scale, const SceneOptions& o, bool ui,
               std::vector<uint8_t>& bgra, const UiState* state = nullptr);
   bool SavePng(const std::wstring& path, UINT w, UINT h, const std::vector<uint8_t>& bgra, std::string& err);
+  // Renders `frames` frames of `m` (the background moving as in the window) and reports the average GPU time of
+  // each pass and the CPU time of a frame, as text.
+  std::wstring Bench(const Model& m, UINT w, UINT h, float scale, int frames);
 
  private:
   ComPtr<ID3D11Device> m_device;

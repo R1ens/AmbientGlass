@@ -64,6 +64,21 @@ float Line(float v, float sharp) {
   return pow(Ridge(v), s) * (s / sharp);
 }
 
+// A drift of the noise domain that never runs away: at velocity v at first (so the start looks exactly as it
+// always did), then bending slowly round a circle of radius 60, so after hours the domain is still near the
+// origin, at the same scale and float precision.
+float2 Drift(float t, float2 v) {
+  const float R = 60;
+  float s = length(v);
+  float a = t * s / R;
+  float2 d = v / max(s, 1e-6), n = float2(-d.y, d.x);
+  return R * (d * sin(a) + n * (1 - cos(a)));
+}
+
+// A beam of light across v: the sharp line as the bright core, inside a glow about eight times wider and much
+// fainter, the way a ray of light scatters in haze. Without the glow a ray reads as a painted stripe.
+float Beam(float v, float sharp) { return Line(v, sharp) + 0.11 * Line(v, sharp * 0.125); }
+
 float3 SrgbToLin(float3 c) { return c <= 0.04045 ? c / 12.92 : pow(max((c + 0.055) / 1.055, 0), 2.4); }
 float3 LinToSrgb(float3 c) {
   c = saturate(c);
@@ -111,30 +126,47 @@ float4 PSRibbons(VSOut i) : SV_Target {
   float reach = centre.w / halfSide;  // rn of the farthest window corner
 
   // The glowing mass behind the cover: an organic rim that breathes with the bass and swells on the beat.
-  float n1 = Fbm(cs * 1.4 + float2(t * 0.07, -t * 0.05));
+  float n1 = Fbm(cs * 1.4 + Drift(t, float2(0.07, -0.05)));
   float rim = (1.25 + 0.45 * n1 + 0.30 * bass + 0.45 * pulse) * (0.92 + 0.16 * fx.z);
   float mass = exp(-2.2 * pow(max(rn - 0.55, 0) / max(rim - 0.55, 0.05), 2));
 
   // Plasma filaments wrapped around the mass: ridged, domain-warped noise flowing slowly outwards.
   float2 q = d / halfSide;
-  float2 warp = float2(Fbm(q * 0.7 + float2(t * 0.05, 0)), Fbm(q * 0.7 + float2(3.1, -t * 0.04)));
-  float fv = Fbm(q * 1.15 + warp * 1.8 - normalize(q + 1e-4) * t * 0.08);
+  float2 warp = float2(Fbm(q * 0.7 + Drift(t, float2(0.05, 0))), Fbm(q * 0.7 + float2(3.1, 0) + Drift(t, float2(0, -0.04))));
+  // The filaments flow outwards. A flow that keeps adding up would pull them into ever thinner radial threads
+  // (neighbouring angles drift further and further apart), so it runs in cycles: two layers, each flowing over
+  // half a cycle either side of rest, cross-fading so that one is always at rest when the other jumps back.
+  const float cycle = 1.2;                        // flow distance of one cycle, in cover half-sides
+  float flow = t * 0.08 / cycle;
+  float u1 = frac(flow + 0.5) - 0.5, u2 = frac(flow) - 0.5;  // -0.5..0.5; layer 1 is at rest at t = 0
+  float w1 = 1 - 2 * abs(u1);                     // w1 + w2 = 1
+  float2 out1 = normalize(q + 1e-4) * cycle;
+  float2 base = q * 1.15 + warp * 1.8;
+  float fv1 = Fbm(base - out1 * u1), fv2 = Fbm(base - out1 * u2 + float2(5.2, 1.3));
   float sharp = lerp(14.0, 7.0, high);
   float ripple = 1 + 0.35 * high * sin(rn * 16 - t * 3.2);
   float filReach = 1.9 + 0.5 * bass + 0.8 * pulse;  // in cover half-sides
-  float fil = Line(fv, sharp) * exp(-pow(max(rn - 0.6, 0) / filReach, 2) * 2.5) * ripple;
+  float fil = (w1 * Line(fv1, sharp) + (1 - w1) * Line(fv2, sharp)) * exp(-pow(max(rn - 0.6, 0) / filReach, 2) * 2.5) * ripple;
 
   // Rays: thin angular threads leaving the mass, slightly curled, each with its own length; they taper and
   // fade along their length but the longest reach the far edges of the window, further on a beat.
   float curl = 0.22 * log2(1 + rn);
   float2 rc = float2(cos(ang + curl), sin(ang + curl));
-  float rv = VNoise(rc * 5.5 + float2(t * 0.03, -t * 0.02));
-  float lenNoise = VNoise(rc * 4.0 + 11.0 + t * 0.01);
+  float rv = VNoise(rc * 5.5 + Drift(t, float2(0.03, -0.02)));
+  float lenNoise = VNoise(rc * 4.0 + 11.0 + Drift(t, float2(0.01, 0.01)));
   float rayLen = lerp(0.35, 1.05, lenNoise) * reach * (0.85 + 0.35 * pulse + 0.15 * bass);
   float along = saturate(rn / max(rayLen, 1e-3));
   float width = lerp(22.0, 80.0, saturate(rn / reach));          // thinner further out
-  float ray = Line(rv, width);
+  float ray = Beam(rv, width);
   ray *= smoothstep(0.75, 1.35, rn) * (1 - smoothstep(0.45, 1.0, along)) * pow(1 - along, 1.5);
+  // Depth: whole sectors of rays are brighter or fainter (slowly changing), so some rays come forward and
+  // others stay in the haze instead of all being alike.
+  float sector = VNoise(rc * 2.2 + 31.0 + Drift(t, float2(0.015, -0.01)));
+  ray *= lerp(0.35, 1.35, smoothstep(0.2, 0.8, sector));
+  // Light shafts: a few broad, soft beams behind the thin rays, as when light falls through haze; they start
+  // at the mass and fade with distance.
+  float shaftN = VNoise(rc * 3.0 + 47.0 + Drift(t, float2(0.02, 0.015)));
+  float shaft = shaftN * shaftN * shaftN * smoothstep(0.8, 1.6, rn) * exp(-max(rn - 1, 0) / max(reach, 1) * 2.2);
 
   // A single accent colour; the waves of density are variations of its hue and saturation.
   float3 hsv0 = RgbToHsv(LinToSrgb(col0.rgb));
@@ -148,6 +180,7 @@ float4 PSRibbons(VSOut i) : SV_Target {
   float3 o = cMass * mass * (0.40 + 0.25 * bass + 0.45 * pulse) * col0.w * bright;
   o += cFil * fil * (0.35 + 0.45 * pulse) * col0.w * bright;
   o += cRay * ray * (0.22 + 0.45 * pulse) * (0.85 + 0.30 * fx.z) * col1.w * bright;
+  o += cRay * shaft * (0.18 + 0.10 * pulse) * col1.w * bright;
   return float4(o, 1);
 }
 
@@ -187,16 +220,17 @@ float3 LitTheme(float3 rib, float v) {
   return lerp(base.rgb, min(hue * 0.15, 1), k * 0.90);
 }
 
-// The theme's look, faded into black and silver by fx.y: a black background with silver light, whatever
-// the theme. The light theme first turns grey itself, then, around the middle of the slider (where the
-// interface switches to light text), quickly goes black, so text never sits on a mid grey.
+// The theme's look, faded into black and white by fx.y. Dark themes: a black background with silver light.
+// The light theme: its negative, a white background with the light drawn in black, so the background stays
+// light (and the dark text readable) all along the slider.
 float3 Lit(float3 rib, float v) {
   float3 c = LitTheme(rib, v);
   if (fx.y <= 0) return c;
   float3 mono = ToneMap(Silver(rib) * v * 1.15);
   if (dim.z < 0.5) return lerp(c, mono, fx.y);
-  c = lerp(c, Silver(c), saturate(fx.y * 2));
-  return lerp(c, mono, smoothstep(0.45, 0.55, fx.y));
+  float l = dot(mono, float3(0.2126, 0.7152, 0.0722));
+  float3 negative = SrgbToLin(1 - LinToSrgb(l.xxx));
+  return lerp(c, negative, fx.y);
 }
 
 float3 Background(float2 uv, float2 p) {
@@ -265,21 +299,23 @@ float4 PSComposite(VSOut i) : SV_Target {
     c = lerp(c, Glass(p, i.uv, r, sd), inside);
   }
 
-  // Glow behind the cover: its own colours, blurred far past its edges, added inside the card only.
+  // Glow around the cover: a wide halo of the cover's own colours (each point takes the colour of the nearest
+  // part of the cover, blurred), so the window carries the cover's real colours next to the single-accent blob.
   if (col2.w > 0 && coverRc.z > coverRc.x) {
     float2 cc = (coverRc.xy + coverRc.zw) * 0.5, hs = (coverRc.zw - coverRc.xy) * 0.5;
     float2 rel = (p - cc) / hs;                          // -1..1 over the cover
     float2 cuv = saturate(rel * 0.5 + 0.5);
     float3 cov = SrgbToLin(t2.SampleLevel(sLin, cuv, 6.5).rgb);
     cov = lerp(cov, Silver(cov), fx.y);
-    float dist = max(RoundRectSd(p, coverRc, 24), 0) / hs.x;
-    float glow = exp(-dist * dist * 1.8) * (0.8 + 0.4 * audio.z);
+    float dist = max(RoundRectSd(p, coverRc, 24), 0) / hs.x;  // in cover half-sides from its edge
+    // A bright near glow and a long soft tail reaching about a cover's width away; brighter on the beat.
+    float glow = (exp(-dist * dist * 1.1) + 0.35 * exp(-dist * 1.4)) * (0.8 + 0.4 * audio.z);
     if (dim.w < 0.5) {
-      c += cov * glow * col2.w * 0.32;
+      c += cov * glow * col2.w * 0.85;
     } else {
       // Light theme: the glow tints towards a deep version of the cover's colours instead of adding light.
       float l = dot(cov, float3(0.2126, 0.7152, 0.0722));
-      c = lerp(c, min(cov / max(l, 1e-4) * 0.15, 1), saturate(glow * col2.w * 0.45));
+      c = lerp(c, min(cov / max(l, 1e-4) * 0.15, 1), saturate(glow * col2.w * 0.75));
     }
   }
 

@@ -11,6 +11,7 @@
 #include "aimp_ps_down.h"
 #include "aimp_ps_overlay.h"
 #include "aimp_ps_ribbons.h"
+#include "gpu_timer.h"
 
 namespace glass {
 namespace {
@@ -171,12 +172,19 @@ void GpuScene::Render(ID3D11RenderTargetView* rtv, UINT w, UINT h, float scale, 
     if (r->Valid() && n < kMaxPanels) SetRc(cb.panels[n++], *r, scale);
   cb.info[0] = (float)n;
 
+  auto mark = [&](const char* name) {
+    if (m_timer) m_timer->Mark(name);
+  };
   m_pass.Pass(m_rib.rtv.Get(), m_rib.w, m_rib.h, m_psRibbons.Get(), {}, &cb);
+  mark("ribbons");
   m_ctx->GenerateMips(m_rib.srv.Get());
+  mark("ribbon mips");
   m_pass.Pass(m_small.rtv.Get(), m_small.w, m_small.h, m_psDown.Get(), {m_rib.srv.Get()}, &cb);
   // Glass blur: 28 layout px in the eighth-size texture.
   m_pass.Blur(m_small, m_tmp, m_glass, std::max(1.f, 28.f * scale / 8.f));
+  mark("glass blur");
   m_pass.Pass(rtv, w, h, m_psComposite.Get(), {m_rib.srv.Get(), m_glass.srv.Get(), m_coverSrv.Get()}, &cb);
+  mark("composite");
 }
 
 void GpuScene::RenderOverlay(ID3D11RenderTargetView* rtv, UINT w, UINT h, float scale, const Model& m,

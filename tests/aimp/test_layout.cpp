@@ -202,14 +202,12 @@ TEST(menu_keyboard_skips_separators_and_disabled_items) {
   CHECK_EQ(MenuStep(none, -1, 1), -1);
 }
 
-TEST(light_look_gives_way_to_black_and_silver) {
+TEST(light_look_stays_light_in_black_and_white) {
   Model m;
   m.theme = Theme::Light;
   CHECK(LightLook(m));
-  m.settings.mono = 49;
+  m.settings.mono = 100;  // a negative: still a white background, dark text
   CHECK(LightLook(m));
-  m.settings.mono = 50;  // the background is black from here: light text
-  CHECK(!LightLook(m));
   m.theme = Theme::Dark, m.settings.mono = 0;
   CHECK(!LightLook(m));
 }
